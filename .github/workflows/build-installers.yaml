@@ -6,6 +6,17 @@ on:
         description: Full commit SHA from ircord/frontend
         required: true
         type: string
+  workflow_call:
+    inputs:
+      frontend_sha:
+        required: true
+        type: string
+      desktop_sha:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -49,6 +60,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: desktop
+          ref: ${{ inputs.desktop_sha || github.sha }}
           persist-credentials: false
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,8 +95,15 @@ jobs:
         working-directory: desktop
         env:
           BUNDLE_KIND: ${{ matrix.bundle }}
+          DESKTOP_VERSION: ${{ inputs.version }}
           APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
-        run: bun run build --ci --bundles "$BUNDLE_KIND" -- --locked
+        run: |
+          config=()
+          if [[ -n "$DESKTOP_VERSION" ]]; then
+            [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            config=(--config "{\"version\":\"$DESKTOP_VERSION\"}")
+          fi
+          bun run build --ci --bundles "$BUNDLE_KIND" "${config[@]}" -- --locked
       - name: Test the native code
         working-directory: desktop/src-tauri
         run: cargo test --locked --release --features custom-protocol

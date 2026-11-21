@@ -1,7 +1,28 @@
-# IRCord desktop
+# IRCord Desktop
 
-The Tauri app embeds a static Nuxt build from the sibling `frontend/` checkout.
-The native client connects to the selected IRCord server for sign-in, account settings, messages, and live events.
+IRCord Desktop puts your IRC networks in one native app. Connect to the public IRCord server or a self-hosted instance and receive desktop notifications while IRCord is open.
+
+![IRCord showing a channel, a shared image, and the member list](docs/client.webp)
+
+## Download
+
+| Platform | Installer |
+| --- | --- |
+| macOS, Apple Silicon | [Disk image](https://github.com/ircord/desktop/releases/latest/download/IRCord-macOS-Apple-Silicon.dmg) |
+| Windows, x64 | [Setup program](https://github.com/ircord/desktop/releases/latest/download/IRCord-Windows-x64-setup.exe) |
+| Linux, x64 | [Debian package](https://github.com/ircord/desktop/releases/latest/download/IRCord-Linux-x64.deb) |
+
+The macOS app uses ad hoc signing and has no notarization. The Windows installer has no publisher signature.
+See [releases](https://github.com/ircord/desktop/releases) for release notes and checksums.
+
+## Connect to IRCord
+
+Open the app and choose an IRCord server. The suggested address is `https://chat.ircord.com`.
+IRCord remembers your server and sign-in between launches. Select **Change IRCord server** from the sign-in screen or your profile menu to switch servers.
+
+## Build from source
+
+The Tauri app embeds a static build from the sibling `frontend/` checkout.
 
 ## Prerequisites
 
@@ -18,20 +39,11 @@ The native client connects to the selected IRCord server for sign-in, account se
 Build on the platform and architecture that will run the bundle. The build generates the app icon from the frontend's artwork.
 On macOS, use `bun run build --bundles app` to build the application without a disk image.
 
-### Build installers in GitHub Actions
-
-Run [Build desktop installers](https://github.com/ircord/desktop/actions/workflows/build-installers.yaml)
-with the full `ircord/frontend` commit SHA. Each installer embeds the static site from that commit.
-
-Download the disk image for Apple Silicon, the Windows x64 setup program, or the Linux x64 Debian package from the run.
+To build test installers in GitHub Actions, run [Build desktop installers](https://github.com/ircord/desktop/actions/workflows/build-installers.yaml) with the full frontend commit SHA.
 Each artifact includes the desktop and frontend source revisions in `build-info.txt`.
-The macOS app uses ad hoc signing and has no notarization. The Windows installer has no publisher signature.
 
 ## Verification
 
-On first launch, enter the address of your IRCord server. The app suggests `https://chat.ircord.com`.
-The app remembers your server and sign-in between launches.
-Select **Change IRCord server** from the sign-in screen or your profile menu to choose another server.
 Set `IRCORD_DESKTOP_BACKEND_URL` before launching the executable to supply the address ahead of time.
 The app accepts HTTPS server addresses and local HTTP addresses on `localhost` or `127.0.0.1`.
 Each server has its own browser data. On macOS versions before 14, the app uses temporary browser data.

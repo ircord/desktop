@@ -2,9 +2,12 @@
 
 ## Unreleased
 
+## v0.1.0 — 2026-11-21
+
 ### New
 
-- Open IRCord in a desktop app with the frontend included in the installation.
+- Install IRCord Desktop on Apple Silicon Macs, Windows x64, and Debian-based Linux x64 systems.
+- Open the bundled chat interface as soon as the app starts.
 - Choose the public IRCord server or a self-hosted server on first launch.
 - Receive native notifications while IRCord Desktop is running.
 

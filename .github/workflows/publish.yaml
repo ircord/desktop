@@ -1,0 +1,123 @@
+name: Publish desktop release
+on:
+  workflow_dispatch:
+    inputs:
+      frontend_tag:
+        description: Published frontend tag. Leave empty for the latest stable release.
+        type: string
+      desktop_version:
+        description: Desktop version for a native release, such as 0.1.0.
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      desktop_sha: ${{ steps.source.outputs.desktop_sha }}
+      frontend_sha: ${{ steps.source.outputs.frontend_sha }}
+      frontend_tag: ${{ steps.source.outputs.frontend_tag }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: source
+        env:
+          FRONTEND_TAG: ${{ inputs.frontend_tag }}
+          DESKTOP_VERSION: ${{ inputs.desktop_version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          stable='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          frontend_tag=${FRONTEND_TAG:-$(gh release view -R ircord/frontend --json tagName --jq .tagName)}
+          [[ "$frontend_tag" =~ $stable ]]
+          test "$(gh release view "$frontend_tag" -R ircord/frontend --json isDraft,isPrerelease --jq '.isDraft or .isPrerelease')" = false
+          refs=$(git ls-remote https://github.com/ircord/frontend.git "refs/tags/$frontend_tag" "refs/tags/$frontend_tag^{}")
+          frontend_sha=$(awk -v ref="refs/tags/$frontend_tag" '$2 == ref { tag = $1 } $2 == ref "^{}" { commit = $1 } END { print (commit ? commit : tag) }' <<< "$refs")
+          [[ "$frontend_sha" =~ ^[0-9a-f]{40}$ ]]
+
+          if [[ -n "$DESKTOP_VERSION" ]]; then
+            [[ "v$DESKTOP_VERSION" =~ $stable ]]
+            version=$DESKTOP_VERSION
+            desktop_sha=$(git rev-parse HEAD)
+          else
+            latest=$(gh release view --json tagName,body)
+            previous_frontend=$(jq -r .body <<< "$latest" | sed -n 's/^<!-- ircord-frontend: \(v[0-9.]*\) -->$/\1/p')
+            [[ "$previous_frontend" =~ $stable ]]
+            if [[ $(printf '%s\n' "$frontend_tag" "$previous_frontend" | sort -V | tail -n1) == "$previous_frontend" ]]; then
+              echo "$frontend_tag is already included or superseded."
+              exit 0
+            fi
+            desktop_tag=$(jq -r .tagName <<< "$latest")
+            [[ "$desktop_tag" =~ $stable ]]
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+            desktop_sha=$(git rev-parse "$desktop_tag^{commit}")
+          fi
+          if git show-ref --verify --quiet "refs/tags/v$version"; then
+            echo "Desktop tag v$version already exists." >&2
+            exit 1
+          fi
+          printf 'desktop_sha=%s\nfrontend_sha=%s\nfrontend_tag=%s\nversion=%s\n' \
+            "$desktop_sha" "$frontend_sha" "$frontend_tag" "$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.version != ''
+    uses: ./.github/workflows/build-installers.yaml
+    with:
+      frontend_sha: ${{ needs.prepare.outputs.frontend_sha }}
+      desktop_sha: ${{ needs.prepare.outputs.desktop_sha }}
+      version: ${{ needs.prepare.outputs.version }}
+
+  publish:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.desktop_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: ircord-desktop-*
+          path: installers
+      - name: Publish installers and release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DESKTOP_SHA: ${{ needs.prepare.outputs.desktop_sha }}
+          FRONTEND_SHA: ${{ needs.prepare.outputs.frontend_sha }}
+          FRONTEND_TAG: ${{ needs.prepare.outputs.frontend_tag }}
+          TAG: v${{ needs.prepare.outputs.version }}
+          NATIVE_RELEASE: ${{ inputs.desktop_version != '' }}
+        run: |
+          mkdir release
+          printf 'desktop=%s\nfrontend=%s\n' "$DESKTOP_SHA" "$FRONTEND_SHA" > release/build-info.txt
+          for platform in macos-arm64 windows-x64 linux-x64; do
+            cmp release/build-info.txt "installers/ircord-desktop-$platform/build-info.txt"
+          done
+          cp installers/ircord-desktop-macos-arm64/*.dmg release/IRCord-macOS-Apple-Silicon.dmg
+          cp installers/ircord-desktop-windows-x64/*.exe release/IRCord-Windows-x64-setup.exe
+          cp installers/ircord-desktop-linux-x64/*.deb release/IRCord-Linux-x64.deb
+          (cd release && sha256sum IRCord-* > SHA256SUMS)
+
+          if [[ "$NATIVE_RELEASE" == true ]]; then
+            awk -v tag="$TAG" '/^## / { if (found) exit; found = ($2 == tag); next } found' CHANGELOG.md > notes.md
+            test -s notes.md
+          else
+            gh release view "$FRONTEND_TAG" -R ircord/frontend --json body --jq .body > notes.md
+          fi
+          printf '\nBundled [IRCord frontend %s](https://github.com/ircord/frontend/releases/tag/%s).\n\n<!-- ircord-frontend: %s -->\n' \
+            "$FRONTEND_TAG" "$FRONTEND_TAG" "$FRONTEND_TAG" >> notes.md
+          gh release create "$TAG" --target "$DESKTOP_SHA" --latest \
+            --title "IRCord Desktop $TAG" --notes-file notes.md release/*
