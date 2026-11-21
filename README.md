@@ -18,9 +18,9 @@ The native client connects to the selected IRCord server for sign-in, account se
 Build on the platform and architecture that will run the bundle. The build generates the app icon from the frontend's artwork.
 On macOS, use `bun run build --bundles app` to build the application without a disk image.
 
-### Build alpha installers in GitHub Actions
+### Build installers in GitHub Actions
 
-Run [Build desktop alpha installers](https://github.com/ircord/desktop/actions/workflows/build-alpha.yaml)
+Run [Build desktop installers](https://github.com/ircord/desktop/actions/workflows/build-installers.yaml)
 with the full `ircord/frontend` commit SHA. Each installer embeds the static site from that commit.
 
 Download the disk image for Apple Silicon, the Windows x64 setup program, or the Linux x64 Debian package from the run.

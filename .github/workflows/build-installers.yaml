@@ -1,4 +1,4 @@
-name: Build desktop alpha installers
+name: Build desktop installers
 on:
   workflow_dispatch:
     inputs:
@@ -100,12 +100,12 @@ jobs:
             echo "Expected one $BUNDLE_KIND installer. Found ${#packages[@]}." >&2
             exit 1
           fi
-          mkdir alpha-artifacts
-          cp -- "${packages[0]}" alpha-artifacts/
+          mkdir installers
+          cp -- "${packages[0]}" installers/
           printf 'desktop=%s\nfrontend=%s\n' "$(git rev-parse HEAD)" "$FRONTEND_SHA" \
-            > alpha-artifacts/build-info.txt
+            > installers/build-info.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ircord-desktop-alpha-${{ matrix.platform }}
-          path: desktop/alpha-artifacts/
+          name: ircord-desktop-${{ matrix.platform }}
+          path: desktop/installers/
           if-no-files-found: error
