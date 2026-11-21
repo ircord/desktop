@@ -61,6 +61,14 @@ From `desktop/`, run the following command after installing the frontend's Playw
 bun scripts/verify-frontend.mjs http://127.0.0.1:41987
 ```
 
+## Publish a release
+
+For native changes, move the desktop changelog entries into a dated version section.
+Run [Publish desktop release](https://github.com/ircord/desktop/actions/workflows/publish.yaml) with that desktop version and a published frontend tag.
+
+The frontend workflow dispatches desktop builds after stable frontend releases.
+These builds increment the desktop patch version, keep the last released native code, and embed the new frontend.
+
 ## Recovery
 
 If the app cannot reach the server, open **Change IRCord server** and check the address.
