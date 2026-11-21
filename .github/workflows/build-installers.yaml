@@ -109,3 +109,31 @@ jobs:
           name: ircord-desktop-${{ matrix.platform }}
           path: desktop/installers/
           if-no-files-found: error
+      - name: Install and start IRCord on Windows
+        if: runner.os == 'Windows'
+        timeout-minutes: 3
+        working-directory: desktop
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem installers -Filter '*.exe'
+          $installPath = Join-Path $env:RUNNER_TEMP 'ircord-install-check'
+          $setup = Start-Process -FilePath $installer.FullName -ArgumentList "/S /D=$installPath" -Wait -PassThru
+          if ($setup.ExitCode -ne 0) {
+            throw "The installer exited with code $($setup.ExitCode)."
+          }
+          $app = Start-Process -FilePath (Join-Path $installPath 'ircord-desktop.exe') -PassThru
+          try {
+            $deadline = (Get-Date).AddSeconds(30)
+            do {
+              Start-Sleep -Milliseconds 250
+              $app.Refresh()
+              if ($app.HasExited) {
+                throw "IRCord exited with code $($app.ExitCode)."
+              }
+            } until ($app.MainWindowTitle -eq 'IRCord' -or (Get-Date) -ge $deadline)
+            if ($app.MainWindowTitle -ne 'IRCord') {
+              throw 'IRCord did not open its setup window.'
+            }
+          } finally {
+            Stop-Process -Id $app.Id -ErrorAction SilentlyContinue
+          }

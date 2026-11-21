@@ -17,3 +17,4 @@
 ### Fixed
 
 - Connect to a local server using an HTTP address with `localhost`.
+- Install the certificates needed to connect to HTTPS servers on Debian and Ubuntu.
