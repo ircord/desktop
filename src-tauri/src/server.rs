@@ -1,6 +1,5 @@
 use std::{fs, io, path::PathBuf};
 use tauri::{AppHandle, Manager, Url};
-use tauri_plugin_shell::ShellExt;
 
 pub fn parse(address: &str) -> Result<Url, &'static str> {
     let address = Url::parse(address.trim()).map_err(|_| "Enter a complete server address.")?;
@@ -46,24 +45,41 @@ pub fn save(app: &AppHandle, address: &Url) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-pub async fn verify(app: &AppHandle, address: &Url) -> Result<(), &'static str> {
+pub async fn verify(client: &reqwest::Client, address: &Url) -> Result<(), &'static str> {
     let failed =
         "Could not find an IRCord server at this address. Check the address and try again.";
-    let output = app
-        .shell()
-        .sidecar("ircord-bun")
-        .map_err(|_| failed)?
-        .args([
-            "--no-env-file",
-            "--eval",
-            include_str!("../../scripts/probe-server.mjs"),
-        ])
-        .env_clear()
-        .env("IRCORD_SETUP_SERVER", address.as_str())
-        .output()
+    let session = client
+        .get(address.join("/api/v1/auth/session").map_err(|_| failed)?)
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
         .await
         .map_err(|_| failed)?;
-    output.status.success().then_some(()).ok_or(failed)
+    if !session.status().is_success() {
+        return Err(failed);
+    }
+    let session = crate::transport::read_body(session, 32 << 10)
+        .await
+        .map_err(|_| failed)?;
+    let session: serde_json::Value = serde_json::from_slice(&session).map_err(|_| failed)?;
+    if !matches!(session.get("account"), Some(serde_json::Value::Null)) {
+        return Err(failed);
+    }
+    let model = client
+        .head(
+            address
+                .join("/api/v1/app/speech/zonos3/v1/models/backbone/shard-000.bin")
+                .map_err(|_| failed)?,
+        )
+        .timeout(std::time::Duration::from_secs(8))
+        .send()
+        .await
+        .map_err(|_| failed)?;
+    if model.status() != reqwest::StatusCode::FOUND {
+        return Err(
+            "This server needs an IRCord backend update before the desktop app can connect.",
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

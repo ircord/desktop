@@ -1,10 +1,14 @@
 {
   "identifier": "workspace",
-  "description": "Window and notification access for the local IRCord frontend.",
+  "description": "Native transport, window and notification access for the IRCord frontend.",
   "windows": ["main"],
   "local": true,
-  "remote": { "urls": ["http://127.0.0.1:47832/*"] },
   "permissions": [
+    "allow-api-request",
+    "allow-cancel-request",
+    "allow-open-socket",
+    "allow-send-socket",
+    "allow-close-socket",
     "allow-notification-permission",
     "allow-request-notification-permission",
     "allow-show-notification",

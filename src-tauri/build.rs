@@ -1,6 +1,11 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
         "connect_server",
+        "api_request",
+        "cancel_request",
+        "open_socket",
+        "send_socket",
+        "close_socket",
         "notification_permission",
         "request_notification_permission",
         "show_notification",

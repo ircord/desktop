@@ -2,26 +2,17 @@
 
 mod notifications;
 mod server;
+mod transport;
 
 use sha2::{Digest, Sha256};
-use std::{error::Error, sync::Mutex, time::Duration};
 use tauri::{
-    AppHandle, Manager, RunEvent, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    path::BaseDirectory,
-    webview::{
-        NewWindowResponse,
-        cookie::{Cookie, SameSite},
-    },
+    AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    webview::NewWindowResponse,
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
-use tauri_plugin_shell::{
-    ShellExt,
-    process::{CommandChild, CommandEvent},
-};
+use transport::Transport;
 
-const LOOPBACK: &str = "http://127.0.0.1:47832";
-const DEV_FRONTEND: &str = "http://127.0.0.1:4789";
 const TITLE_BAR: &str = if cfg!(target_os = "macos") {
     "macos"
 } else if cfg!(target_os = "windows") {
@@ -30,200 +21,84 @@ const TITLE_BAR: &str = if cfg!(target_os = "macos") {
     "linux"
 };
 
-#[derive(Default)]
-struct Frontend {
-    child: Mutex<Option<CommandChild>>,
-    connecting: tauri::async_runtime::Mutex<()>,
-}
-
 fn setup_window(app: &AppHandle) -> tauri::Result<()> {
-    WebviewWindowBuilder::new(app, "setup", WebviewUrl::App("index.html".into()))
-        .title("IRCord")
-        .inner_size(820., 600.)
-        .min_inner_size(340., 350.)
-        .center()
-        .build()?;
+    WebviewWindowBuilder::new(
+        app,
+        "setup",
+        WebviewUrl::App("desktop-setup/index.html".into()),
+    )
+    .title("IRCord")
+    .inner_size(560., 440.)
+    .min_inner_size(360., 350.)
+    .center()
+    .build()?;
     Ok(())
 }
 
-fn open_window(
-    app: &AppHandle,
-    address: Url,
-    key: Option<String>,
-    profile: Option<&str>,
-) -> tauri::Result<()> {
-    let initial = if key.is_some() {
-        Url::parse("about:blank").unwrap()
-    } else {
-        address.clone()
-    };
-    let open = app.clone();
-    let local_origin = address.origin();
-    let navigation_origin = local_origin.clone();
-    let frontend_origin = serde_json::to_string(&local_origin.ascii_serialization())
-        .expect("Serialize the local frontend origin");
+fn open_window(app: &AppHandle, server: &Url) -> tauri::Result<()> {
+    let origin = server.origin().ascii_serialization();
+    let marker = serde_json::json!({ "serverOrigin": origin, "titleBar": TITLE_BAR });
     let desktop_marker = format!(
-        "if (window.location.origin === {frontend_origin}) Object.defineProperty(window, '__IRCordDesktop', {{ value: Object.freeze({{ titleBar: '{TITLE_BAR}' }}) }});"
+        "Object.defineProperty(window, '__IRCordDesktop', {{ value: Object.freeze({marker}) }});"
     );
-    let mut window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(initial))
+    let open = app.clone();
+    let dev_origin = tauri::is_dev()
+        .then(|| app.config().build.dev_url.as_ref().map(Url::origin))
+        .flatten();
+    let mut window = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("IRCord")
         .inner_size(1280., 840.)
         .min_inner_size(380., 350.)
         .initialization_script(desktop_marker)
         .disable_drag_drop_handler()
-        // WebView cookies are scoped to the loopback host, across ports. Keep the
-        // hosted instance's session and cache out of custom backends and dev.
-        .incognito(profile.is_none())
-        .visible(key.is_none())
-        // HTTPS frames support the frontend's media embeds. Keep other loopback
-        // origins out of this window and give remote pages no native permissions.
         .on_navigation(move |url| {
-            url.origin() == navigation_origin
+            (url.host_str() == Some("localhost") && url.scheme() == "tauri")
+                || (url.host_str() == Some("tauri.localhost")
+                    && matches!(url.scheme(), "http" | "https"))
+                || dev_origin
+                    .as_ref()
+                    .is_some_and(|origin| *origin == url.origin())
                 || url.as_str() == "about:blank"
-                || (url.scheme() == "https" && url.host_str() != Some("127.0.0.1"))
         })
         .on_new_window(move |url, _| {
-            if url.origin() == local_origin {
-                if let Some(window) = open.get_webview_window("main") {
-                    let _ = window.navigate(url);
-                }
-            } else if matches!(url.scheme(), "http" | "https") {
+            if matches!(url.scheme(), "http" | "https" | "mailto") {
                 let _ = open.opener().open_url(url.as_str(), None::<&str>);
             }
             NewWindowResponse::Deny
         });
+    let fingerprint = Sha256::digest(origin.as_bytes());
     #[cfg(target_os = "macos")]
     {
         window = window
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true)
-            .traffic_light_position(tauri::LogicalPosition::new(15., 15.));
+            .traffic_light_position(tauri::LogicalPosition::new(15., 12.));
+        let version = objc2_foundation::NSProcessInfo::processInfo().operatingSystemVersion();
+        window = if version.majorVersion >= 14 {
+            window.data_store_identifier(fingerprint[..16].try_into().unwrap())
+        } else {
+            window.incognito(true)
+        };
     }
     #[cfg(not(target_os = "macos"))]
     {
-        window = window.decorations(false);
+        let directory = app
+            .path()
+            .app_local_data_dir()?
+            .join(format!("server-{fingerprint:x}"));
+        window = window.decorations(false).data_directory(directory);
     }
-    if let Some(profile) = profile {
-        let fingerprint = Sha256::digest(profile.as_bytes());
-        #[cfg(target_os = "macos")]
-        {
-            let version = objc2_foundation::NSProcessInfo::processInfo().operatingSystemVersion();
-            window = if version.majorVersion >= 14 {
-                window.data_store_identifier(fingerprint[..16].try_into().unwrap())
-            } else {
-                window.incognito(true)
-            };
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let directory = app
-                .path()
-                .app_local_data_dir()?
-                .join(format!("server-{fingerprint:x}"));
-            window = window.data_directory(directory);
-        }
-    }
-    let window = window.build()?;
-    if let Some(key) = key {
-        let cookie = Cookie::build(("ircord_desktop", key))
-            .domain("127.0.0.1")
-            .path("/")
-            .http_only(true)
-            .same_site(SameSite::Strict)
-            .build();
-        window.set_cookie(cookie)?;
-        window.navigate(address)?;
-        window.show()?;
-        window.set_focus()?;
-    }
+    window.build()?;
     Ok(())
 }
 
 fn show_error(app: &AppHandle) {
     let exit = app.clone();
     app.dialog()
-        .message("IRCord could not open its local frontend. Close any other IRCord windows and reopen the app.")
+        .message("IRCord could not open its window. Quit IRCord and open it again.")
         .title("IRCord")
         .kind(MessageDialogKind::Error)
         .show(move |_| exit.exit(1));
-}
-
-fn start_frontend(app: &AppHandle, backend: &Url) -> Result<(), Box<dyn Error>> {
-    let frontend = app.state::<Frontend>();
-    let mut running = frontend.child.lock().unwrap();
-    if running.is_some() {
-        return Ok(());
-    }
-    let address = Url::parse(LOOPBACK)?;
-    let backend_origin = backend.origin().ascii_serialization();
-    let mut bytes = [0_u8; 32];
-    getrandom::fill(&mut bytes).map_err(std::io::Error::other)?;
-    let key = bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    let entry = app
-        .path()
-        .resolve("frontend/server/index.mjs", BaseDirectory::Resource)?;
-    let (mut events, child) = app
-        .shell()
-        .sidecar("ircord-bun")?
-        .args(["--no-env-file".as_ref(), entry.as_os_str()])
-        .env_clear()
-        .env("NITRO_HOST", "127.0.0.1")
-        .env("NITRO_PORT", address.port().unwrap().to_string())
-        .env("NUXT_BACKEND_URL", &backend_origin)
-        .env("NUXT_SITE_URL", LOOPBACK)
-        .env("NUXT_PUBLIC_INSTANCE_URL", &backend_origin)
-        .env("IRCORD_DESKTOP_KEY", &key)
-        .spawn()?;
-
-    *running = Some(child);
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        // Trust readiness from our own child. Another process may hold the port.
-        let ready_line = format!("Listening on {address}...");
-        let ready = tokio::time::timeout(Duration::from_secs(20), async {
-            while let Some(event) = events.recv().await {
-                match event {
-                    CommandEvent::Stdout(line)
-                        if String::from_utf8_lossy(&line).trim_end() == ready_line =>
-                    {
-                        return true;
-                    }
-                    CommandEvent::Terminated(_) | CommandEvent::Error(_) => break,
-                    _ => {}
-                }
-            }
-            false
-        })
-        .await
-        .unwrap_or(false);
-        if !ready {
-            show_error(&app);
-            return;
-        }
-        let handle = app.clone();
-        if app
-            .run_on_main_thread(move || {
-                if open_window(&handle, address, Some(key), Some(&backend_origin)).is_err() {
-                    show_error(&handle);
-                } else if let Some(setup) = handle.get_webview_window("setup") {
-                    let _ = setup.close();
-                }
-            })
-            .is_err()
-        {
-            app.exit(1);
-        }
-        while let Some(event) = events.recv().await {
-            if matches!(event, CommandEvent::Terminated(_) | CommandEvent::Error(_)) {
-                show_error(&app);
-                break;
-            }
-        }
-    });
-    Ok(())
 }
 
 #[tauri::command]
@@ -235,15 +110,18 @@ async fn connect_server(
     if window.label() != "setup" {
         return Err("Open the server setup window first.".into());
     }
-    let frontend = app.state::<Frontend>();
-    let _connecting = frontend
+    let transport = app.state::<Transport>();
+    let _connecting = transport
         .connecting
         .try_lock()
         .map_err(|_| "The server is already being checked.")?;
     let address = server::parse(&address)?;
-    server::verify(&app, &address).await?;
+    server::verify(&transport.client, &address).await?;
     server::save(&app, &address).map_err(|_| "Could not save the server address. Try again.")?;
-    start_frontend(&app, &address).map_err(|_| "Could not open IRCord. Try again.".to_string())
+    transport.select(address.clone());
+    open_window(&app, &address).map_err(|_| "Could not open IRCord. Try again.")?;
+    let _ = window.close();
+    Ok(())
 }
 
 fn main() {
@@ -251,10 +129,14 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_shell::init())
-        .manage(Frontend::default())
+        .manage(Transport::new().expect("Create the native IRCord client"))
         .invoke_handler(tauri::generate_handler![
             connect_server,
+            transport::api_request,
+            transport::cancel_request,
+            transport::open_socket,
+            transport::send_socket,
+            transport::close_socket,
             notifications::notification_permission,
             notifications::request_notification_permission,
             notifications::show_notification,
@@ -262,32 +144,18 @@ fn main() {
         ])
         .setup(|app| {
             notifications::listen(app.handle())?;
-            if tauri::is_dev()
-                && let Some(url) = app.config().build.dev_url.clone()
-                && url.origin().ascii_serialization() == DEV_FRONTEND
-            {
-                open_window(app.handle(), url, None, None)?;
-            } else {
-                match server::configured(app.handle()) {
-                    Ok(Some(backend)) => {
-                        if start_frontend(app.handle(), &backend).is_err() {
-                            show_error(app.handle());
-                        }
+            match server::configured(app.handle()) {
+                Ok(Some(server)) => {
+                    app.state::<Transport>().select(server.clone());
+                    if open_window(app.handle(), &server).is_err() {
+                        show_error(app.handle());
                     }
-                    Ok(None) => setup_window(app.handle())?,
-                    Err(_) => show_error(app.handle()),
                 }
+                Ok(None) => setup_window(app.handle())?,
+                Err(_) => show_error(app.handle()),
             }
             Ok(())
         })
-        .build(tauri::generate_context!())
-        .expect("Build IRCord desktop application")
-        .run(|app, event| {
-            if matches!(event, RunEvent::Exit)
-                && let Some(frontend) = app.try_state::<Frontend>()
-                && let Some(child) = frontend.child.lock().unwrap().take()
-            {
-                let _ = child.kill();
-            }
-        });
+        .run(tauri::generate_context!())
+        .expect("Run IRCord Desktop");
 }

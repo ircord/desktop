@@ -1,4 +1,4 @@
-import { copyFileSync, cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const desktop = resolve(import.meta.dir, '..')
@@ -10,21 +10,12 @@ function run(command: string[], cwd: string, env = process.env) {
   if (!result.success) throw new Error(`The frontend command exited with code ${result.exitCode}.`)
 }
 
-const rust = Bun.spawnSync(['rustc', '-vV'])
-const host = rust.stdout.toString().match(/^host: (\S+)$/m)?.[1]
-if (!rust.success || !host) throw new Error('Could not determine the Rust host target.')
-if (process.env.TAURI_ENV_TARGET_TRIPLE && process.env.TAURI_ENV_TARGET_TRIPLE !== host) {
-  throw new Error('Build IRCord on the same platform and architecture as the target.')
-}
 if (!(await Bun.file(resolve(frontend, 'package.json')).exists())) {
   throw new Error('Initialize the frontend submodule next to desktop before building.')
 }
 
 const bun = process.execPath
 const output = resolve(bundle, 'frontend-dist')
-const binaries = resolve(bundle, 'binaries')
-mkdirSync(binaries, { recursive: true })
-copyFileSync(bun, resolve(binaries, `ircord-bun-${host}${process.platform === 'win32' ? '.exe' : ''}`))
 
 if (process.argv.includes('--dev')) {
   // Cargo resolves the bundle paths even though Tauri dev uses Vite.
@@ -56,35 +47,29 @@ if (process.argv.includes('--dev')) {
     }, () => false)
   if (occupied) throw new Error(`Port ${port} is already in use. Close that server before starting IRCord Desktop.`)
 
-  const configuredBackend = process.env.IRCORD_DESKTOP_BACKEND_URL
-  const backend = configuredBackend && new URL(configuredBackend)
-  if (backend && (
-    backend.username || backend.password || backend.pathname !== '/' || backend.search || backend.hash ||
-    (backend.protocol !== 'https:' && !(backend.protocol === 'http:' && backend.hostname === '127.0.0.1'))
-  )) throw new Error('Use an HTTPS server address or local HTTP on 127.0.0.1.')
-
   run([bun, 'x', 'nuxt', 'dev', '--host', hostname, '--port', port], frontend, {
     ...process.env,
     IRCORD_DESKTOP_DEV_DIR: buildDir,
-    NUXT_SITE_URL: devUrl,
-    ...(backend && { NUXT_BACKEND_URL: backend.origin, NUXT_PUBLIC_INSTANCE_URL: backend.origin }),
+    IRCORD_DESKTOP_SETUP_DIR: resolve(desktop, 'setup'),
+    NUXT_DEMO: 'false',
   })
   process.exit(0)
 }
 
 // Build from the sibling checkout. Skip the web deployment's local environment file.
-copyFileSync(resolve(frontend, 'public/icons/icon-192.png'), resolve(desktop, 'setup/icon.png'))
 const version = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD'], { cwd: frontend })
 const staging = mkdtempSync(resolve(bundle, 'frontend-build-'))
 try {
-  run([bun, '--no-env-file', 'run', 'build', '--dotenv', '.env.desktop'], frontend, {
+  run([bun, '--no-env-file', 'x', 'nuxt', 'generate', '--dotenv', '.env.desktop'], frontend, {
     ...process.env,
     IRCORD_DESKTOP_BUILD_DIR: staging,
+    NUXT_DEMO: 'false',
     IRCORD_VERSION: version.success ? version.stdout.toString().trim() : '',
   })
-  // Nitro links some dependencies. Tauri's resource bundler copies only files.
+  // Tauri embeds the generated site and the server chooser in the application.
   rmSync(output, { recursive: true, force: true })
-  cpSync(staging, output, { recursive: true, dereference: true })
+  cpSync(resolve(staging, 'public'), output, { recursive: true, dereference: true })
+  cpSync(resolve(desktop, 'setup'), resolve(output, 'desktop-setup'), { recursive: true })
 } finally {
   rmSync(staging, { recursive: true, force: true })
 }
