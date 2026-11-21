@@ -15,6 +15,15 @@ IRCord Desktop puts your IRC networks in one native app. Connect to the public I
 The macOS app uses ad hoc signing and has no notarization. The Windows installer has no publisher signature.
 See [releases](https://github.com/ircord/desktop/releases) for release notes and checksums.
 
+## Desktop controls
+
+Use **Open IRCord** or **Quit IRCord** in the macOS menu bar, Windows notification area, or Linux system tray.
+The Linux tray requires a desktop environment that supports status indicators.
+
+On macOS and Windows, IRCord checks for updates at startup and asks before it installs one.
+To check manually, select **Check for updates** from Settings → About or the tray menu.
+On Linux, install the latest Debian package when a new version is available.
+
 ## Connect to IRCord
 
 Open the app and choose an IRCord server. The suggested address is `https://chat.ircord.com`.
@@ -37,7 +46,8 @@ The Tauri app embeds a static build from the sibling `frontend/` checkout.
 3. Run `bun run build` in `desktop/`.
 4. Open the bundle from `desktop/src-tauri/target/release/bundle/`.
 
-Build on the platform and architecture that will run the bundle. The build generates the app icon from the frontend's artwork.
+Build on the platform and architecture that will run the bundle.
+The build generates the Mac icon from `assets/macos-icon.svg` and the Windows and Linux icons from the frontend artwork.
 On macOS, use `bun run build --bundles app` to build the application without a disk image.
 
 To build test installers in GitHub Actions, run [Build desktop installers](https://github.com/ircord/desktop/actions/workflows/build-installers.yaml) with the full frontend commit SHA.
@@ -65,9 +75,15 @@ bun scripts/verify-frontend.mjs http://127.0.0.1:41987
 
 For native changes, move the desktop changelog entries into a dated version section.
 Run [Publish desktop release](https://github.com/ircord/desktop/actions/workflows/publish.yaml) with that desktop version and a published frontend tag.
+Select **Build and verify the release assets without publishing them** to test the release workflow.
 
 The frontend workflow dispatches desktop builds after stable frontend releases.
 These builds increment the desktop patch version, keep the last released native code, and embed the new frontend.
+
+For releases with in-app updates, set the repository Actions secret `TAURI_SIGNING_PRIVATE_KEY` to the key that matches the public key in `src-tauri/tauri.conf.json`.
+If the key has a password, set `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` as well.
+Keep a secure backup so future releases can update existing installs.
+The release verifies both update packages before publishing `latest.json`.
 
 ## Recovery
 

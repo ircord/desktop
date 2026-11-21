@@ -10,7 +10,7 @@
     "build": "tauri build",
     "dev:frontend": "bun run icons && bun --no-env-file scripts/build-frontend.ts --dev",
     "build:frontend": "bun run icons && bun --no-env-file scripts/build-frontend.ts",
-    "icons": "tauri icon ../frontend/public/icons/icon-512.png"
+    "icons": "bun scripts/build-icons.ts"
   },
   "devDependencies": {
     "@tauri-apps/cli": "2.12.6"

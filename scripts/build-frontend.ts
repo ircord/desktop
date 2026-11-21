@@ -58,13 +58,17 @@ if (process.argv.includes('--dev')) {
 
 // Build from the sibling checkout. Skip the web deployment's local environment file.
 const version = Bun.spawnSync(['git', 'rev-parse', '--short', 'HEAD'], { cwd: frontend })
+const release = process.env.IRCORD_DESKTOP_FRONTEND_TAG
+if (release && !/^v\d+\.\d+\.\d+$/.test(release)) {
+  throw new Error('The bundled frontend version must be a stable release tag.')
+}
 const staging = mkdtempSync(resolve(bundle, 'frontend-build-'))
 try {
   run([bun, '--no-env-file', 'x', 'nuxt', 'generate', '--dotenv', '.env.desktop'], frontend, {
     ...process.env,
     IRCORD_DESKTOP_BUILD_DIR: staging,
     NUXT_DEMO: 'false',
-    IRCORD_VERSION: version.success ? version.stdout.toString().trim() : '',
+    IRCORD_VERSION: release || (version.success ? version.stdout.toString().trim() : ''),
   })
   // Tauri embeds the generated site and the server chooser in the application.
   rmSync(output, { recursive: true, force: true })

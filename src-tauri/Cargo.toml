@@ -13,14 +13,19 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "nat
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["image-png", "tray-icon"] }
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "=2.7.0"
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "sync", "time"] }
 tokio-tungstenite = { version = "0.30", features = ["native-tls"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+tauri-plugin-updater = { version = "2", default-features = false, features = ["native-tls", "zip"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"

@@ -8,6 +8,10 @@ on:
       desktop_version:
         description: Desktop version for a native release, such as 0.1.0.
         type: string
+      verify_only:
+        description: Build and verify the release assets without publishing them.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,6 +28,7 @@ jobs:
       frontend_sha: ${{ steps.source.outputs.frontend_sha }}
       frontend_tag: ${{ steps.source.outputs.frontend_tag }}
       version: ${{ steps.source.outputs.version }}
+      signed_updates: ${{ steps.source.outputs.signed_updates }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -67,6 +72,8 @@ jobs:
           fi
           printf 'desktop_sha=%s\nfrontend_sha=%s\nfrontend_tag=%s\nversion=%s\n' \
             "$desktop_sha" "$frontend_sha" "$frontend_tag" "$version" >> "$GITHUB_OUTPUT"
+          git show "$desktop_sha:src-tauri/tauri.conf.json" |
+            jq -r '"signed_updates=\((.plugins.updater.pubkey // "") != "")"' >> "$GITHUB_OUTPUT"
 
   build:
     needs: prepare
@@ -74,8 +81,13 @@ jobs:
     uses: ./.github/workflows/build-installers.yaml
     with:
       frontend_sha: ${{ needs.prepare.outputs.frontend_sha }}
+      frontend_tag: ${{ needs.prepare.outputs.frontend_tag }}
       desktop_sha: ${{ needs.prepare.outputs.desktop_sha }}
       version: ${{ needs.prepare.outputs.version }}
+      signed_updates: ${{ needs.prepare.outputs.signed_updates == 'true' }}
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
   publish:
     needs: [prepare, build]
@@ -91,15 +103,10 @@ jobs:
         with:
           pattern: ircord-desktop-*
           path: installers
-      - name: Publish installers and release notes
+      - name: Collect installers
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           DESKTOP_SHA: ${{ needs.prepare.outputs.desktop_sha }}
           FRONTEND_SHA: ${{ needs.prepare.outputs.frontend_sha }}
-          FRONTEND_TAG: ${{ needs.prepare.outputs.frontend_tag }}
-          TAG: v${{ needs.prepare.outputs.version }}
-          NATIVE_RELEASE: ${{ inputs.desktop_version != '' }}
         run: |
           mkdir release
           printf 'desktop=%s\nfrontend=%s\n' "$DESKTOP_SHA" "$FRONTEND_SHA" > release/build-info.txt
@@ -109,8 +116,43 @@ jobs:
           cp installers/ircord-desktop-macos-arm64/*.dmg release/IRCord-macOS-Apple-Silicon.dmg
           cp installers/ircord-desktop-windows-x64/*.exe release/IRCord-Windows-x64-setup.exe
           cp installers/ircord-desktop-linux-x64/*.deb release/IRCord-Linux-x64.deb
-          (cd release && sha256sum IRCord-* > SHA256SUMS)
+      - name: Verify updater signatures and create the update manifest
+        if: needs.prepare.outputs.signed_updates == 'true'
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_URL: ${{ github.server_url }}/${{ github.repository }}/releases/download/v${{ needs.prepare.outputs.version }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y minisign
+          cp installers/ircord-desktop-macos-arm64/*.app.tar.gz release/IRCord-macOS-Apple-Silicon.app.tar.gz
+          cp installers/ircord-desktop-macos-arm64/*.app.tar.gz.sig release/IRCord-macOS-Apple-Silicon.app.tar.gz.sig
+          cp installers/ircord-desktop-windows-x64/*.exe.sig release/IRCord-Windows-x64-setup.exe.sig
+          jq -er '.plugins.updater.pubkey' src-tauri/tauri.conf.json | base64 -d > updater.pub
+          for asset in IRCord-macOS-Apple-Silicon.app.tar.gz IRCord-Windows-x64-setup.exe; do
+            base64 -d "release/$asset.sig" > updater.sig
+            minisign -Vm "release/$asset" -p updater.pub -x updater.sig
+            grep -Eq "^trusted comment:.*[[:space:]]version:${VERSION//./\\.}([[:space:]]|$)" updater.sig
+          done
+          jq -n \
+            --arg version "$VERSION" --arg url "$RELEASE_URL" \
+            --rawfile mac release/IRCord-macOS-Apple-Silicon.app.tar.gz.sig \
+            --rawfile win release/IRCord-Windows-x64-setup.exe.sig \
+            '{version: $version, platforms: {
+              "darwin-aarch64": {url: ($url + "/IRCord-macOS-Apple-Silicon.app.tar.gz"), signature: $mac},
+              "windows-x86_64": {url: ($url + "/IRCord-Windows-x64-setup.exe"), signature: $win}
+            }}' > release/latest.json
 
+      - name: Publish installers and release notes
+        if: "!inputs.verify_only"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          DESKTOP_SHA: ${{ needs.prepare.outputs.desktop_sha }}
+          FRONTEND_TAG: ${{ needs.prepare.outputs.frontend_tag }}
+          TAG: v${{ needs.prepare.outputs.version }}
+          NATIVE_RELEASE: ${{ inputs.desktop_version != '' }}
+        run: |
+          (cd release && sha256sum IRCord-* > SHA256SUMS)
           if [[ "$NATIVE_RELEASE" == true ]]; then
             awk -v tag="$TAG" '/^## / { if (found) exit; found = ($2 == tag); next } found' CHANGELOG.md > notes.md
             test -s notes.md

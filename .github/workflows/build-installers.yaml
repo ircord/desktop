@@ -11,12 +11,23 @@ on:
       frontend_sha:
         required: true
         type: string
+      frontend_tag:
+        required: true
+        type: string
       desktop_sha:
         required: true
         type: string
       version:
         required: true
         type: string
+      signed_updates:
+        required: true
+        type: boolean
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: false
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
 
 permissions:
   contents: read
@@ -91,27 +102,51 @@ jobs:
         working-directory: desktop
         run: bun install --frozen-lockfile
 
-      - name: Build the installer
+      - name: Compile IRCord
         working-directory: desktop
         env:
-          BUNDLE_KIND: ${{ matrix.bundle }}
           DESKTOP_VERSION: ${{ inputs.version }}
-          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+          IRCORD_DESKTOP_FRONTEND_TAG: ${{ inputs.frontend_tag }}
+          IRCORD_DESKTOP_UPDATES: ${{ inputs.signed_updates && runner.os != 'Linux' && '1' || '' }}
         run: |
           config=()
           if [[ -n "$DESKTOP_VERSION" ]]; then
             [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
             config=(--config "{\"version\":\"$DESKTOP_VERSION\"}")
           fi
-          bun run build --ci --bundles "$BUNDLE_KIND" "${config[@]}" -- --locked
+          bun run build --ci --no-bundle "${config[@]}" -- --locked
       - name: Test the native code
         working-directory: desktop/src-tauri
         run: cargo test --locked --release --features custom-protocol
+      - name: Bundle the installer
+        working-directory: desktop
+        env:
+          BUNDLE_KIND: ${{ matrix.bundle }}
+          DESKTOP_VERSION: ${{ inputs.version }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+          SIGNED_UPDATES: ${{ inputs.signed_updates && runner.os != 'Linux' }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ inputs.signed_updates && runner.os != 'Linux' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.signed_updates && runner.os != 'Linux' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: |
+          config=()
+          if [[ -n "$DESKTOP_VERSION" ]]; then
+            [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+            config=(--config "{\"version\":\"$DESKTOP_VERSION\"}")
+          fi
+          if [[ "$SIGNED_UPDATES" == true ]]; then
+            if [[ -z "$TAURI_SIGNING_PRIVATE_KEY" ]]; then
+              echo 'The desktop update signing key is missing.' >&2
+              exit 1
+            fi
+            config+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
+          fi
+          bun tauri bundle --ci --bundles "$BUNDLE_KIND" "${config[@]}"
       - name: Collect the installer and source revisions
         working-directory: desktop
         env:
           BUNDLE_KIND: ${{ matrix.bundle }}
           BUNDLE_EXT: ${{ matrix.extension }}
+          SIGNED_UPDATES: ${{ inputs.signed_updates && runner.os != 'Linux' }}
         run: |
           shopt -s nullglob
           packages=(src-tauri/target/release/bundle/"$BUNDLE_KIND"/*."$BUNDLE_EXT")
@@ -121,6 +156,15 @@ jobs:
           fi
           mkdir installers
           cp -- "${packages[0]}" installers/
+          if [[ "$SIGNED_UPDATES" == true ]]; then
+            if [[ "$BUNDLE_KIND" == dmg ]]; then
+              updates=(src-tauri/target/release/bundle/macos/*.app.tar.gz)
+              test "${#updates[@]}" = 1
+              cp -- "${updates[0]}" "${updates[0]}.sig" installers/
+            else
+              cp -- "${packages[0]}.sig" installers/
+            fi
+          fi
           printf 'desktop=%s\nfrontend=%s\n' "$(git rev-parse HEAD)" "$FRONTEND_SHA" \
             > installers/build-info.txt
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

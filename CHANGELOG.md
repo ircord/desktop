@@ -2,9 +2,19 @@
 
 ## Unreleased
 
+### New
+
+- Get notified about desktop updates on macOS and Windows and install them from IRCord.
+- Open the IRCord window, check for updates, or quit from the system tray or Mac menu bar.
+
 ### Improved
 
 - Check that a server runs IRCord before opening sign-in, and see whether you can create an account there.
+- Remember the size and position of the chat window and bring it forward when IRCord opens again.
+
+### Fixed
+
+- Make the IRCord icon fill its space in the macOS Dock.
 
 ## v0.1.0 — 2026-11-21
 

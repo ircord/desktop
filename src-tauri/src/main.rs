@@ -4,8 +4,12 @@ mod notifications;
 mod server;
 mod session;
 mod transport;
+mod tray;
+mod updates;
 
 use sha2::{Digest, Sha256};
+#[cfg(target_os = "macos")]
+use tauri::RunEvent;
 use tauri::{
     AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
     webview::NewWindowResponse,
@@ -38,7 +42,12 @@ fn setup_window(app: &AppHandle) -> tauri::Result<()> {
 
 fn open_window(app: &AppHandle, server: &Url) -> tauri::Result<()> {
     let origin = server.origin().ascii_serialization();
-    let marker = serde_json::json!({ "serverOrigin": origin, "titleBar": TITLE_BAR });
+    let marker = serde_json::json!({
+        "serverOrigin": origin,
+        "titleBar": TITLE_BAR,
+        "version": app.package_info().version.to_string(),
+        "canCheckForUpdates": updates::available(),
+    });
     let desktop_marker = format!(
         "Object.defineProperty(window, '__IRCordDesktop', {{ value: Object.freeze({marker}) }});"
     );
@@ -102,6 +111,29 @@ fn show_error(app: &AppHandle) {
         .title("IRCord")
         .kind(MessageDialogKind::Error)
         .show(move |_| exit.exit(1));
+}
+
+fn open_or_focus(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(window) = app
+        .get_webview_window("setup")
+        .or_else(|| app.get_webview_window("main"))
+    {
+        window.unminimize()?;
+        window.show()?;
+        window.set_focus()?;
+    } else if let Some(server) = server::configured(app)? {
+        app.state::<Transport>().select(app, server.clone())?;
+        open_window(app, &server)?;
+    } else {
+        setup_window(app)?;
+    }
+    Ok(())
+}
+
+fn activate(app: &AppHandle) {
+    if open_or_focus(app).is_err() {
+        show_error(app);
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -169,14 +201,32 @@ async fn choose_server(app: AppHandle, window: WebviewWindow) -> Result<(), Stri
 }
 
 fn main() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            activate(app)
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_denylist(&["setup"])
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .build(),
+        );
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    let builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+
+    builder
         .manage(Transport::new().expect("Create the native IRCord client"))
         .invoke_handler(tauri::generate_handler![
             check_server,
+            updates::check_for_updates,
             connect_server,
             choose_server,
             transport::api_request,
@@ -191,19 +241,26 @@ fn main() {
         ])
         .setup(|app| {
             notifications::listen(app.handle())?;
-            match server::configured(app.handle()) {
-                Ok(Some(server)) => {
-                    app.state::<Transport>()
-                        .select(app.handle(), server.clone())?;
-                    if open_window(app.handle(), &server).is_err() {
-                        show_error(app.handle());
-                    }
-                }
-                Ok(None) => setup_window(app.handle())?,
-                Err(_) => show_error(app.handle()),
+            activate(app.handle());
+            if let Err(error) = tray::register(app.handle()) {
+                eprintln!("Could not open the IRCord tray menu: {error}");
             }
+            updates::schedule(app.handle());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("Run IRCord Desktop");
+        .build(tauri::generate_context!())
+        .expect("Build IRCord Desktop")
+        .run(|_app, _event| {
+            #[cfg(target_os = "macos")]
+            match _event {
+                RunEvent::Reopen {
+                    has_visible_windows: false,
+                    ..
+                } => activate(_app),
+                RunEvent::ExitRequested {
+                    code: None, api, ..
+                } => api.prevent_exit(),
+                _ => {}
+            }
+        });
 }

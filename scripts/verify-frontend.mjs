@@ -44,6 +44,7 @@ try {
     const seen = new Map()
     const sockets = new Map()
     const testNotifications = []
+    let updateChecks = 0
     let cookie = ''
     let frames = 0
     let synced = false
@@ -94,9 +95,15 @@ try {
       if (command === 'notification_permission' || command === 'request_notification_permission')
         return 'granted'
       if (command === 'show_notification') testNotifications.push(args)
+      if (command === 'check_for_updates') updateChecks++
     })
     await context.addInitScript(({ titleBar, serverOrigin }) => {
-      window.__IRCordDesktop = { titleBar, serverOrigin }
+      window.__IRCordDesktop = {
+        titleBar,
+        serverOrigin,
+        version: '0.1.2',
+        canCheckForUpdates: titleBar !== 'linux',
+      }
       window.windowActions = []
       window.desktopChannels = new Map()
       let maximized = false
@@ -210,6 +217,19 @@ try {
       assert.equal(testNotifications[0].body, 'This is a test notification.')
       if (process.env.IRCORD_DESKTOP_TEST_SHOTS)
         await page.screenshot({ path: resolve(process.env.IRCORD_DESKTOP_TEST_SHOTS, `ircord-${titleBar}-device.png`), animations: 'disabled' })
+      await dialog.locator('[data-section="about"]').click()
+      await dialog.getByText('Version 0.1.2', { exact: true }).waitFor()
+      await dialog.getByText(backend.origin, { exact: true }).waitFor()
+      await dialog.getByText('Bundled frontend', { exact: true }).waitFor()
+      const updates = dialog.getByRole('button', { name: 'Check for updates', exact: true })
+      if (titleBar === 'linux') {
+        assert.equal(await updates.count(), 0)
+      } else {
+        await updates.click()
+        assert.equal(updateChecks, 1)
+      }
+      if (process.env.IRCORD_DESKTOP_TEST_SHOTS)
+        await page.screenshot({ path: resolve(process.env.IRCORD_DESKTOP_TEST_SHOTS, `ircord-${titleBar}-about.png`), animations: 'disabled' })
       await page.keyboard.press('Escape')
       await toolbar.click({ position: { x: 500, y: 12 } })
       assert.deepEqual(await page.evaluate(() => window.windowActions), ['drag'])
