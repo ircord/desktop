@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.2 — 2026-11-21
+
 ### New
 
 - Get notified about desktop updates on macOS and Windows and install them from IRCord.
