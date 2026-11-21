@@ -1,0 +1,111 @@
+name: Build desktop alpha installers
+on:
+  workflow_dispatch:
+    inputs:
+      frontend_sha:
+        description: Full commit SHA from ircord/frontend
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-15
+            bundle: dmg
+            extension: dmg
+          - platform: windows-x64
+            runner: windows-2025
+            bundle: nsis
+            extension: exe
+          - platform: linux-x64
+            runner: ubuntu-24.04
+            bundle: deb
+            extension: deb
+
+    env:
+      FRONTEND_SHA: ${{ inputs.frontend_sha }}
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Validate the frontend revision
+        run: |
+          if [[ ! "$FRONTEND_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo 'Enter a full commit SHA from ircord/frontend.' >&2
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: desktop
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ircord/frontend
+          ref: ${{ inputs.frontend_sha }}
+          path: frontend
+          persist-credentials: false
+      - name: Verify the frontend checkout
+        run: test "$(git -C frontend rev-parse HEAD)" = "$FRONTEND_SHA"
+
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+      - name: Install Linux build prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential file libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: bun install --frozen-lockfile
+
+      - name: Build the installer
+        working-directory: desktop
+        env:
+          BUNDLE_KIND: ${{ matrix.bundle }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && '-' || '' }}
+        run: bun run build --ci --bundles "$BUNDLE_KIND" -- --locked
+      - name: Test the native code
+        working-directory: desktop/src-tauri
+        run: cargo test --locked --release --features custom-protocol
+      - name: Collect the installer and source revisions
+        working-directory: desktop
+        env:
+          BUNDLE_KIND: ${{ matrix.bundle }}
+          BUNDLE_EXT: ${{ matrix.extension }}
+        run: |
+          shopt -s nullglob
+          packages=(src-tauri/target/release/bundle/"$BUNDLE_KIND"/*."$BUNDLE_EXT")
+          if [[ ${#packages[@]} != 1 ]]; then
+            echo "Expected one $BUNDLE_KIND installer. Found ${#packages[@]}." >&2
+            exit 1
+          fi
+          mkdir alpha-artifacts
+          cp -- "${packages[0]}" alpha-artifacts/
+          printf 'desktop=%s\nfrontend=%s\n' "$(git rev-parse HEAD)" "$FRONTEND_SHA" \
+            > alpha-artifacts/build-info.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ircord-desktop-alpha-${{ matrix.platform }}
+          path: desktop/alpha-artifacts/
+          if-no-files-found: error
