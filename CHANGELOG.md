@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.3 — 2026-11-21
+
 ### Fixed
 
 - Fix GIF pause for Giphy, Tenor, and Imgur in desktop webviews that support it.
