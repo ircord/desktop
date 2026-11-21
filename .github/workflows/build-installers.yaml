@@ -129,6 +129,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ inputs.signed_updates && runner.os != 'Linux' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: |
           config=()
+          bundles=("$BUNDLE_KIND")
           if [[ -n "$DESKTOP_VERSION" ]]; then
             [[ "$DESKTOP_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
             config=(--config "{\"version\":\"$DESKTOP_VERSION\"}")
@@ -138,9 +139,12 @@ jobs:
               echo 'The desktop update signing key is missing.' >&2
               exit 1
             fi
+            if [[ "$BUNDLE_KIND" == dmg ]]; then
+              bundles+=(app)
+            fi
             config+=(--config '{"bundle":{"createUpdaterArtifacts":true}}')
           fi
-          bun tauri bundle --ci --bundles "$BUNDLE_KIND" "${config[@]}"
+          bun tauri bundle --ci --bundles "${bundles[@]}" "${config[@]}"
       - name: Collect the installer and source revisions
         working-directory: desktop
         env:
@@ -159,7 +163,10 @@ jobs:
           if [[ "$SIGNED_UPDATES" == true ]]; then
             if [[ "$BUNDLE_KIND" == dmg ]]; then
               updates=(src-tauri/target/release/bundle/macos/*.app.tar.gz)
-              test "${#updates[@]}" = 1
+              if [[ ${#updates[@]} != 1 ]]; then
+                echo 'Expected one macOS updater archive.' >&2
+                exit 1
+              fi
               cp -- "${updates[0]}" "${updates[0]}.sig" installers/
             else
               cp -- "${packages[0]}.sig" installers/
