@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Connect to IRCord</title>
+    <link rel="stylesheet" href="./setup.css">
+    <script src="./setup.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <img src="./icon.png" width="48" height="48" alt="">
+      <h1>Connect to IRCord</h1>
+      <p>Use the public IRCord server or enter your own server address.</p>
+      <form>
+        <label for="server-address">Server address</label>
+        <input id="server-address" name="server" type="url" value="https://chat.ircord.com"
+          autocomplete="url" autocapitalize="none" spellcheck="false" maxlength="2048"
+          aria-describedby="server-error" required>
+        <p id="server-error" role="alert"></p>
+        <button type="submit">Continue</button>
+        <p id="progress" role="status" class="visually-hidden"></p>
+      </form>
+    </main>
+  </body>
+</html>

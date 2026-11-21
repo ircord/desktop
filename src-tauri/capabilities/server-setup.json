@@ -1,0 +1,6 @@
+{
+  "identifier": "server-setup",
+  "description": "Only the local setup window can select the IRCord server.",
+  "windows": ["setup"],
+  "permissions": ["allow-connect-server"]
+}

@@ -1,0 +1,113 @@
+:root {
+  color-scheme: dark;
+  --canvas: #111013;
+  --surface: #18161a;
+  --field: #211e23;
+  --border: #544953;
+  --ink: #f4f0f3;
+  --muted: #a89ea6;
+  --accent: #f43f5e;
+  --accent-hover: #fb7185;
+  --button-text: #170b11;
+  --error: #fda4af;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --canvas: #efe9ec;
+    --surface: #fcf9fa;
+    --field: #fff;
+    --border: #92848c;
+    --ink: #261f24;
+    --muted: #6b5e66;
+    --accent: #be123c;
+    --accent-hover: #a61136;
+    --button-text: #fff;
+    --error: #9f1239;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  padding: 24px 16px;
+  display: grid;
+  place-items: center;
+  color: var(--ink);
+  background: radial-gradient(ellipse 60% 50% at 50% 0%, color-mix(in srgb, var(--accent) 14%, transparent), transparent), var(--canvas);
+}
+
+main {
+  width: min(420px, 100%);
+  padding: 32px 28px 28px;
+  border-radius: 14px;
+  text-align: center;
+  background: var(--surface);
+  box-shadow: 0 14px 32px #0002;
+}
+
+img { display: block; margin: 0 auto 14px; }
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+p { margin: 0; color: var(--muted); line-height: 1.55; }
+
+form {
+  margin-top: 24px;
+  display: grid;
+  gap: 8px;
+  text-align: left;
+}
+
+label { font-weight: 600; }
+
+input, button {
+  min-height: 40px;
+  width: 100%;
+  border-radius: 8px;
+  font: inherit;
+}
+
+input {
+  border: 1px solid var(--border);
+  padding: 8px 10px;
+  background: var(--field);
+  color: var(--ink);
+  caret-color: var(--accent);
+}
+
+button {
+  margin-top: 4px;
+  border: 0;
+  padding: 8px 12px;
+  background: var(--accent);
+  color: var(--button-text);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:hover:enabled { background: var(--accent-hover); }
+button:disabled { opacity: 0.72; cursor: progress; }
+input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+::selection { color: var(--button-text); background: var(--accent); }
+#server-error { color: var(--error); font-size: 13px; }
+#server-error:empty { margin-bottom: -8px; }
+
+.visually-hidden {
+  clip-path: inset(50%);
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  white-space: nowrap;
+}
