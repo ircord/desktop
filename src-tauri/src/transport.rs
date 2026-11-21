@@ -1,20 +1,24 @@
-use base64::{Engine, engine::general_purpose::STANDARD};
+use crate::session::SessionStore;
+use base64::{
+    Engine,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use futures_util::{SinkExt, StreamExt};
 use reqwest::{Client, Method, header};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     sync::{Mutex, RwLock},
     time::Duration,
 };
-use tauri::{AppHandle, Manager, State, Url, WebviewWindow, ipc::Channel, webview::cookie::Cookie};
+use tauri::{AppHandle, Manager, State, Url, WebviewWindow, ipc::Channel};
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::{
     connect_async_with_config,
     tungstenite::{Message, client::IntoClientRequest, protocol::WebSocketConfig},
 };
 
-const SESSION: &str = "ircord_session";
 const MAX_BODY: usize = 32 << 20;
 const MAX_EVENT: usize = 8 << 20;
 const MAX_COMMAND: usize = 16 << 10;
@@ -23,7 +27,7 @@ const OFFLINE: &str = "Could not reach the IRCord server.";
 pub struct Transport {
     pub client: Client,
     pub connecting: tokio::sync::Mutex<()>,
-    server: RwLock<Option<Url>>,
+    server: RwLock<Option<(Url, SessionStore)>>,
     requests: Mutex<HashMap<String, oneshot::Sender<()>>>,
     sockets: Mutex<HashMap<String, mpsc::Sender<SocketCommand>>>,
 }
@@ -43,8 +47,17 @@ impl Transport {
         })
     }
 
-    pub fn select(&self, server: Url) {
-        *self.server.write().unwrap() = Some(server);
+    pub fn select(&self, app: &AppHandle, server: Url) -> tauri::Result<()> {
+        let key = Sha256::digest(server.origin().ascii_serialization().as_bytes());
+        let path = app
+            .path()
+            .app_local_data_dir()?
+            .join("sessions")
+            .join(URL_SAFE_NO_PAD.encode(key));
+        self.requests.lock().unwrap().clear();
+        self.sockets.lock().unwrap().clear();
+        *self.server.write().unwrap() = Some((server, SessionStore::open(path)));
+        Ok(())
     }
 
     fn server(&self, window: &WebviewWindow) -> Result<Url, &'static str> {
@@ -54,8 +67,32 @@ impl Transport {
         self.server
             .read()
             .unwrap()
-            .clone()
+            .as_ref()
+            .map(|(server, _)| server.clone())
             .ok_or("Select an IRCord server first.")
+    }
+
+    fn session(&self, server: &Url) -> Option<header::HeaderValue> {
+        self.server
+            .read()
+            .unwrap()
+            .as_ref()
+            .filter(|(selected, _)| selected == server)
+            .and_then(|(_, session)| session.header())
+    }
+
+    fn store_session(&self, server: &Url, headers: &header::HeaderMap) -> Result<(), &'static str> {
+        if !headers.contains_key(header::SET_COOKIE) {
+            return Ok(());
+        }
+        if let Some((selected, session)) = self.server.write().unwrap().as_mut()
+            && selected == server
+        {
+            session
+                .update(headers)
+                .map_err(|_| "Could not save the IRCord session.")?;
+        }
+        Ok(())
     }
 }
 
@@ -74,50 +111,6 @@ fn target(server: &Url, path: &str) -> Result<Url, &'static str> {
         return Err("Invalid IRCord request.");
     }
     Ok(target)
-}
-
-fn session(window: &WebviewWindow, url: &Url) -> Result<Option<header::HeaderValue>, &'static str> {
-    let cookies = window
-        .cookies_for_url(url.clone())
-        .map_err(|_| "Could not read the IRCord session.")?;
-    cookies
-        .iter()
-        .find(|cookie| cookie.name() == SESSION)
-        .map(|cookie| {
-            header::HeaderValue::from_str(&format!("{SESSION}={}", cookie.value()))
-                .map_err(|_| "Could not read the IRCord session.")
-        })
-        .transpose()
-}
-
-fn store_session(
-    window: &WebviewWindow,
-    server: &Url,
-    headers: &header::HeaderMap,
-) -> Result<(), &'static str> {
-    for value in headers.get_all(header::SET_COOKIE) {
-        let Some(mut cookie) = value
-            .to_str()
-            .ok()
-            .and_then(|value| Cookie::parse(value.to_owned()).ok())
-            .filter(|cookie| cookie.name() == SESSION)
-        else {
-            continue;
-        };
-        cookie.set_domain(
-            server
-                .host_str()
-                .ok_or("Invalid IRCord server.")?
-                .to_owned(),
-        );
-        cookie.set_path("/");
-        cookie.set_http_only(true);
-        cookie.set_secure(server.scheme() == "https");
-        window
-            .set_cookie(cookie)
-            .map_err(|_| "Could not save the IRCord session.")?;
-    }
-    Ok(())
 }
 
 pub async fn read_body(
@@ -188,7 +181,7 @@ pub async fn api_request(
         }
     }
     if request.credentials
-        && let Some(value) = session(&window, &url)?
+        && let Some(value) = transport.session(&server)
     {
         upstream = upstream.header(header::COOKIE, value);
     }
@@ -215,7 +208,7 @@ pub async fn api_request(
         result = async {
             let response = upstream.send().await.map_err(|_| OFFLINE)?;
             if request.credentials {
-                store_session(&window, &server, response.headers())?;
+                transport.store_session(&server, response.headers())?;
             }
             let status = response.status().as_u16();
             let headers = response.headers().iter().filter(|(key, _)| {
@@ -266,11 +259,28 @@ pub async fn open_socket(
     events: Channel<SocketEvent>,
 ) -> Result<(), String> {
     let server = transport.server(&window)?;
-    let mut url = target(&server, &path)?;
+    let url = target(&server, &path)?;
     if url.path() != "/api/v1/events" {
         return Err("Invalid IRCord event stream.".into());
     }
-    let cookie = session(&window, &url)?.ok_or("Sign in to open the IRCord event stream.")?;
+    let cookie = transport
+        .session(&server)
+        .ok_or("Sign in to open the IRCord event stream.")?;
+    let request = event_request(&server, url, cookie)?;
+    let (queue, commands) = mpsc::channel(32);
+    transport.sockets.lock().unwrap().insert(id.clone(), queue);
+    tauri::async_runtime::spawn(async move {
+        run_socket(request, commands, events).await;
+        app.state::<Transport>().sockets.lock().unwrap().remove(&id);
+    });
+    Ok(())
+}
+
+fn event_request(
+    server: &Url,
+    mut url: Url,
+    cookie: header::HeaderValue,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, &'static str> {
     url.set_scheme(if server.scheme() == "https" {
         "wss"
     } else {
@@ -282,13 +292,11 @@ pub async fn open_socket(
         .into_client_request()
         .map_err(|_| "Invalid IRCord event stream.")?;
     request.headers_mut().insert(header::COOKIE, cookie);
-    let (queue, commands) = mpsc::channel(32);
-    transport.sockets.lock().unwrap().insert(id.clone(), queue);
-    tauri::async_runtime::spawn(async move {
-        run_socket(request, commands, events).await;
-        app.state::<Transport>().sockets.lock().unwrap().remove(&id);
-    });
-    Ok(())
+    // Hosted IRCord checks the Origin before handing the upgrade to Go.
+    let origin = header::HeaderValue::from_str(&server.origin().ascii_serialization())
+        .map_err(|_| "Invalid IRCord event stream.")?;
+    request.headers_mut().insert(header::ORIGIN, origin);
+    Ok(request)
 }
 
 async fn run_socket(
@@ -387,5 +395,23 @@ mod tests {
         assert!(target(&server, "//other.example/api/v1/auth/session").is_err());
         assert!(target(&server, "/api/v1/../../admin").is_err());
         assert!(target(&server, "/api/v1/auth/session#fragment").is_err());
+    }
+
+    #[test]
+    fn event_handshake_uses_the_selected_origin() {
+        for (address, scheme) in [
+            ("https://ircord.example:8443", "wss"),
+            ("http://127.0.0.1:8080", "ws"),
+        ] {
+            let server = Url::parse(address).unwrap();
+            let url = target(&server, "/api/v1/events?sync=1").unwrap();
+            let request =
+                event_request(&server, url, "ircord_session=test".parse().unwrap()).unwrap();
+            assert_eq!(request.uri().scheme_str(), Some(scheme));
+            assert_eq!(request.uri().path(), "/api/v1/events");
+            assert_eq!(request.uri().query(), Some("sync=1"));
+            assert_eq!(request.headers()[header::ORIGIN], address);
+            assert_eq!(request.headers()[header::COOKIE], "ircord_session=test");
+        }
     }
 }

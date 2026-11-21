@@ -1,7 +1,7 @@
 # IRCord desktop
 
-The Tauri app packages the Nuxt frontend from the sibling `frontend/` checkout.
-At launch, the app serves that build over a private loopback address. The app connects to the IRCord backend for accounts, messages, files, and live events.
+The Tauri app embeds a static Nuxt build from the sibling `frontend/` checkout.
+The native client connects to the selected IRCord server for sign-in, account settings, messages, and live events.
 
 ## Prerequisites
 
@@ -21,27 +21,26 @@ On macOS, use `bun run build --bundles app` to build the application without a d
 ## Verification
 
 On first launch, enter the address of your IRCord server. The app suggests `https://chat.ircord.com`.
-The app uses the saved address on later launches.
+The app remembers your server and sign-in between launches.
+Select **Change IRCord server** from the sign-in screen or your profile menu to choose another server.
 Set `IRCORD_DESKTOP_BACKEND_URL` before launching the executable to supply the address ahead of time.
 The app accepts HTTPS server addresses and local HTTP addresses on `127.0.0.1`.
 Each server has its own browser data. On macOS versions before 14, the app uses temporary browser data.
 
 Run `bun tauri dev` in `desktop/` for frontend hot reload on port 4789.
-Start the Go backend with `make backend` in the workspace root.
-Set `IRCORD_DESKTOP_BACKEND_URL` when starting Tauri to use another backend in dev.
-Run `bun run dev:bundle` to test the server picker and packaged frontend.
+It connects directly to the local Go backend on port 8080. Start Go with `make backend` in the workspace root.
+Use **Change IRCord server** to save a different address for hot reload, or set `IRCORD_DESKTOP_BACKEND_URL` for a single launch.
+Run `bun run dev:bundle` to test the static frontend in Tauri.
 
 To check a macOS bundle in WebKit, start a disposable Go backend on `127.0.0.1:41987` with registration enabled.
 From `desktop/`, run the following command after installing the frontend's Playwright WebKit browser.
 
 ```sh
-bun scripts/verify-frontend.mjs http://127.0.0.1:41987 \
-  src-tauri/target/release/bundle/macos/IRCord.app/Contents/Resources/frontend/server/index.mjs \
-  src-tauri/target/release/bundle/macos/IRCord.app/Contents/MacOS/ircord-bun
+bun scripts/verify-frontend.mjs http://127.0.0.1:41987
 ```
 
 ## Recovery
 
-If the app cannot start its local frontend, close other IRCord desktop windows and check whether another process uses TCP port 47832.
-To choose a different server, close IRCord and remove the `server` file from the app's configuration directory.
+If the app cannot reach the server, open **Change IRCord server** and check the address.
+To clear a saved address while the app is closed, remove the `server` file from the app's configuration directory.
 On macOS, the directory is `~/Library/Application Support/com.ircord.desktop/`.

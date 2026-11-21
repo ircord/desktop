@@ -4,6 +4,7 @@
   "windows": ["main"],
   "local": true,
   "permissions": [
+    "allow-choose-server",
     "allow-api-request",
     "allow-cancel-request",
     "allow-open-socket",
@@ -13,6 +14,7 @@
     "allow-request-notification-permission",
     "allow-show-notification",
     "allow-focus-notification-window",
+    "notification:allow-is-permission-granted",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-start-dragging",

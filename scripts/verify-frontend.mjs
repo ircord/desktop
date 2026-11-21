@@ -1,71 +1,115 @@
 import assert from 'node:assert/strict'
-import { once } from 'node:events'
-import { createServer } from 'node:net'
 import { resolve } from 'node:path'
 import { webkit } from '../../frontend/node_modules/playwright/index.mjs'
 
-const [backend, entry, bun = process.execPath] = process.argv.slice(2)
-const upstream = new URL(backend)
-assert.equal(upstream.protocol, 'http:')
-assert.equal(upstream.hostname, '127.0.0.1', 'Use a disposable loopback backend.')
-
-const listener = createServer().listen(0, '127.0.0.1')
-await once(listener, 'listening')
-const { port } = listener.address()
-await new Promise((resolve) => listener.close(resolve))
-const origin = `http://127.0.0.1:${port}`
-const key = crypto.randomUUID()
-const server = Bun.spawn([resolve(bun), '--no-env-file', resolve(entry)], {
-  env: {
-    NITRO_HOST: '127.0.0.1',
-    NITRO_PORT: String(port),
-    NUXT_BACKEND_URL: upstream.origin,
-    NUXT_SITE_URL: origin,
-    NUXT_PUBLIC_INSTANCE_URL: upstream.origin,
-    IRCORD_DESKTOP_KEY: key,
+const backend = new URL(process.argv[2])
+assert.equal(backend.origin, `http://127.0.0.1:${backend.port}`, 'Use a disposable Go backend.')
+const assets = resolve(import.meta.dirname, '../src-tauri/frontend-dist')
+assert(!(await Bun.file(resolve(assets, 'server/index.mjs')).exists()))
+const server = Bun.serve({
+  hostname: '127.0.0.1',
+  port: 0,
+  async fetch(request) {
+    const path = new URL(request.url).pathname
+    if (path.startsWith('/api/')) return new Response(null, { status: 404 })
+    const file = Bun.file(resolve(assets, `.${path}${path.endsWith('/') ? 'index.html' : ''}`))
+    if (await file.exists()) return new Response(file)
+    return new Response(Bun.file(resolve(assets, 'index.html')))
   },
-  stdin: 'pipe',
-  stderr: 'inherit',
-  stdout: 'inherit',
 })
 
+const credentials = { username: `Desk${Date.now().toString(36)}`, password: crypto.randomUUID() }
+const signup = await fetch(new URL('/api/v1/auth/signup', backend), {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(credentials),
+})
+assert.equal(signup.status, 201)
 let browser
-async function ready() {
-  for (let attempt = 0; attempt < 80; attempt++) {
-    try {
-      return await fetch(origin, { signal: AbortSignal.timeout(200) })
-    } catch {
-      await Bun.sleep(100)
-    }
-  }
-  throw new Error('The bundled frontend failed to start.')
-}
-
 try {
-  assert.equal((await ready()).status, 403, 'Access requires the native window cookie.')
-  const cookie = `ircord_desktop=${key}`
-  for (const headers of [
-    { cookie, origin: 'http://127.0.0.1:1' },
-    { cookie, 'sec-fetch-site': 'same-site' },
-  ]) {
-    assert.equal((await fetch(origin, { headers })).status, 403)
-  }
-
   browser = await webkit.launch()
-  const context = await browser.newContext({ serviceWorkers: 'block' })
-  const titleBar = process.env.IRCORD_TEST_TITLE_BAR
-  if (titleBar) {
-    await context.addInitScript((titleBar) => {
-      window.__IRCordDesktop = { titleBar }
+  for (const titleBar of ['macos', 'windows', 'linux']) {
+    const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1200, height: 780 } })
+    const page = await context.newPage()
+    page.setDefaultTimeout(12_000)
+    const seen = new Map()
+    const sockets = new Map()
+    let cookie = ''
+    let frames = 0
+    let synced = false
+    const errors = []
+    page.on('pageerror', (error) => errors.push(error.message))
+    const events = (id, event) => page.evaluate(({ id, event }) => window.desktopChannels?.get(id)?.(event), { id, event }).catch(() => {})
+    await page.exposeFunction('nativeInvoke', async (command, args) => {
+      if (command === 'api_request') {
+        const { path, method, headers, body, credentials } = args.request
+        const url = new URL(path, backend)
+        assert.equal(url.origin, backend.origin)
+        const response = await fetch(url, {
+          method, redirect: 'manual',
+          headers: [...headers, ...(credentials && cookie ? [['Cookie', cookie]] : [])],
+          ...(body && { body: Buffer.from(body, 'base64') }),
+        })
+        seen.set(`${method} ${url.pathname}`, response.status)
+        for (const value of response.headers.getSetCookie())
+          if (value.startsWith('ircord_session=')) cookie = value.split(';')[0]
+        return {
+          status: response.status,
+          headers: [...response.headers].filter(([key]) => key !== 'set-cookie'),
+          body: Buffer.from(await response.arrayBuffer()).toString('base64'),
+        }
+      }
+      if (command === 'open_socket') {
+        const url = new URL(args.path, backend)
+        assert.equal(url.pathname, '/api/v1/events')
+        assert.ok(cookie.startsWith('ircord_session='))
+        url.protocol = 'ws:'
+        const socket = new WebSocket(url, { headers: { Cookie: cookie, Origin: backend.origin } })
+        sockets.set(args.id, socket)
+        socket.onopen = () => void events(args.events.id, { type: 'open' })
+        socket.onmessage = ({ data }) => {
+          frames++
+          if (JSON.parse(data).type === 'session.synced') synced = true
+          void events(args.events.id, { type: 'message', data })
+        }
+        socket.onclose = ({ code, reason }) => {
+          sockets.delete(args.id)
+          void events(args.events.id, { type: 'close', code, reason })
+        }
+        socket.onerror = () => void events(args.events.id, { type: 'error' })
+        return
+      }
+      if (command === 'send_socket') sockets.get(args.id)?.send(args.data)
+      if (command === 'close_socket') sockets.get(args.id)?.close()
+      if (command === 'notification_permission') return 'granted'
+    })
+    await context.addInitScript(({ titleBar, serverOrigin }) => {
+      window.__IRCordDesktop = { titleBar, serverOrigin }
       window.windowActions = []
+      window.desktopChannels = new Map()
       let maximized = false
       window.__TAURI__ = {
-        core: { invoke: async () => 'granted' },
+        core: {
+          invoke: (command, args) => {
+            if (command === 'choose_server') {
+              window.windowActions.push('choose')
+              return Promise.resolve()
+            }
+            return window.nativeInvoke(command, args)
+          },
+          Channel: class {
+            constructor(onmessage) {
+              this.id = crypto.randomUUID()
+              window.desktopChannels.set(this.id, onmessage)
+            }
+          },
+        },
         event: { listen: async () => () => {} },
         window: {
           getCurrentWindow: () => ({
             isMaximized: async () => maximized,
             isFullscreen: async () => false,
+            startDragging: async () => window.windowActions.push('drag'),
             toggleMaximize: async () => { maximized = !maximized },
             minimize: async () => window.windowActions.push('minimize'),
             close: async () => window.windowActions.push('close'),
@@ -73,80 +117,73 @@ try {
           }),
         },
       }
-    }, titleBar)
-  }
-  await context.addCookies([
-    { name: 'ircord_desktop', value: key, url: origin, httpOnly: true, sameSite: 'Strict' },
-  ])
-  // The packaged client must load with the local server as its only network origin.
-  await context.route('**/*', (route) => (
-    new URL(route.request().url()).origin === origin ? route.continue() : route.abort()
-  ))
-  const page = await context.newPage()
-  assert.equal((await page.goto(origin)).status(), 200)
-  await page.getByRole('button', { name: 'Sign in', exact: true }).first().waitFor()
-
-  const credentials = { username: `Desktop${Date.now()}`, password: 'disposable-test-password' }
-  async function authenticate(path, body, status) {
-    assert.equal(await page.evaluate(async ({ path, body }) => {
-      const response = await fetch(`/api/v1/auth/${path}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+    }, { titleBar, serverOrigin: backend.origin })
+    try {
+      let browserApiRequests = 0
+      page.on('request', (request) => {
+        if (new URL(request.url()).pathname.startsWith('/api/')) browserApiRequests++
       })
-      return response.status
-    }, { path, body }), status)
-  }
-  await authenticate('signup', credentials, 201)
-  await authenticate('logout', undefined, 204)
-  await authenticate('login', credentials, 200)
-  const session = await page.evaluate(async () => (await fetch('/api/v1/auth/session')).json())
-  assert.equal(session.account?.username, credentials.username)
-  const sessionCookie = (await context.cookies(origin)).find(({ name }) => name === 'ircord_session')
-  assert.equal(sessionCookie?.httpOnly, true)
-  assert.equal((await page.request.get(`${origin}/api/app/preferences`)).status(), 200)
-  await page.reload()
-  await page.locator('.workspace').waitFor()
-  if (titleBar) {
-    const bar = page.locator('.desktop-titlebar')
-    const bounds = await bar.boundingBox()
-    const workspace = await page.locator('.workspace-bar').boundingBox()
-    assert.ok(bounds && workspace && bounds.y + bounds.height <= workspace.y)
-    assert.ok(await bar.getAttribute('data-tauri-drag-region') !== null)
-    if (titleBar !== 'macos') {
-      await bar.getByRole('button', { name: 'Maximize window' }).click()
-      await bar.getByRole('button', { name: 'Restore window' }).waitFor()
-      await bar.getByRole('button', { name: 'Restore window' }).click()
-      await bar.getByRole('button', { name: 'Maximize window' }).waitFor()
-      await bar.getByRole('button', { name: 'Minimize window' }).click()
-      await bar.getByRole('button', { name: 'Close window' }).click()
-      assert.deepEqual(await page.evaluate(() => window.windowActions), ['minimize', 'close'])
+      await page.goto(server.url.href)
+      await page.getByRole('button', { name: 'Change IRCord server' }).click()
+      assert.deepEqual(await page.evaluate(() => window.windowActions), ['choose'])
+      await page.getByLabel('Username', { exact: true }).fill(credentials.username)
+      await page.getByLabel('Password', { exact: true }).fill(credentials.password)
+      await page.getByRole('button', { name: 'Sign in', exact: true }).click()
+      await page.locator('.workspace').waitFor()
+      for (let attempt = 0; !synced && attempt < 50; attempt++) await Bun.sleep(100)
+      assert(frames > 0, 'The selected Go server sent authenticated events.')
+      assert(synced, 'The client resumed the private event stream.')
+      for (const endpoint of ['POST /api/v1/auth/login', 'GET /api/v1/app/preferences'])
+        assert.equal(seen.get(endpoint), 200, endpoint)
+      assert.equal(browserApiRequests, 0)
+      await page.reload()
+      const bar = page.locator('.desktop-titlebar')
+      const toolbar = page.locator('.workspace-bar')
+      await toolbar.waitFor()
+      const titleBounds = await bar.boundingBox()
+      const toolbarBounds = await toolbar.boundingBox()
+      assert.equal(titleBounds?.height, 28)
+      assert(titleBounds && toolbarBounds && titleBounds.y + titleBounds.height <= toolbarBounds.y)
+      await toolbar.click({ position: { x: 500, y: 12 } })
+      assert.deepEqual(await page.evaluate(() => window.windowActions), ['drag'])
+      const dialog = page.getByRole('dialog', { name: 'Settings' })
+      const privacy = async () => {
+        await page.getByRole('button', { name: 'User settings' }).click()
+        await dialog.locator('[data-section="privacy"]').click()
+        return dialog.getByRole('switch', { name: 'Show NSFW content' })
+      }
+      const toggle = await privacy()
+      await toggle.waitFor()
+      await toggle.click()
+      for (let attempt = 0; !seen.has('PUT /api/v1/app/preferences') && attempt < 50; attempt++) await Bun.sleep(100)
+      assert.equal(seen.get('PUT /api/v1/app/preferences'), 200)
+      const checked = titleBar !== 'windows'
+      await page.reload()
+      await toggle.and(dialog.locator(`[aria-checked="${checked}"]`)).waitFor()
+      await page.keyboard.press('Escape')
+      await toolbar.click({ position: { x: 500, y: 12 } })
+      assert.deepEqual(await page.evaluate(() => window.windowActions), ['drag'])
+      if (titleBar !== 'macos') {
+        await bar.getByRole('button', { name: 'Maximize window' }).click()
+        await bar.getByRole('button', { name: 'Restore window' }).waitFor()
+        await bar.getByRole('button', { name: 'Minimize window' }).click()
+        await bar.getByRole('button', { name: 'Close window' }).click()
+        assert.deepEqual(await page.evaluate(() => window.windowActions), ['drag', 'minimize', 'close'])
+      }
+      if (process.env.IRCORD_DESKTOP_TEST_SHOTS)
+        await page.screenshot({ path: resolve(process.env.IRCORD_DESKTOP_TEST_SHOTS, `ircord-${titleBar}.png`) })
+      assert.deepEqual(errors, [])
+      console.log(`${titleBar} shell, server chooser, sign-in, saved privacy settings, and private events verified.`)
+    } catch (error) {
+      if (process.env.IRCORD_DESKTOP_TEST_SHOTS)
+        await page.screenshot({ path: resolve(process.env.IRCORD_DESKTOP_TEST_SHOTS, `ircord-${titleBar}-failure.png`) })
+      throw error
+    } finally {
+      for (const socket of sockets.values()) socket.close()
+      await context.close()
     }
-    console.log(`The ${titleBar} layout keeps window controls above the workspace toolbar.`)
-  } else assert.equal(await page.locator('.desktop-titlebar').count(), 0)
-  const event = await page.evaluate(() => new Promise((resolve, reject) => {
-    const socket = new WebSocket('/api/v1/events')
-    const timeout = setTimeout(() => {
-      socket.close()
-      reject(new Error('No live event received.'))
-    }, 5000)
-    socket.addEventListener('message', (event) => {
-      clearTimeout(timeout)
-      socket.close()
-      resolve(JSON.parse(event.data).type)
-    }, { once: true })
-    socket.addEventListener('error', () => {
-      clearTimeout(timeout)
-      reject(new Error('Live connection failed.'))
-    }, { once: true })
-  }))
-  assert.equal(event, 'session.ready')
-  server.stdin.end()
-  assert.equal(await Promise.race([server.exited, Bun.sleep(3000).then(() => 'timeout')]), 0)
-  console.log('Packaged frontend, sign-in, session, preferences, workspace, and WebSocket verified.')
-  console.log('Frontend exits when the desktop parent closes its pipe.')
+  }
 } finally {
   await browser?.close()
-  server.kill()
-  await server.exited
+  server.stop(true)
 }

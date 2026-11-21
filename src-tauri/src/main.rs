@@ -2,6 +2,7 @@
 
 mod notifications;
 mod server;
+mod session;
 mod transport;
 
 use sha2::{Digest, Sha256};
@@ -72,7 +73,7 @@ fn open_window(app: &AppHandle, server: &Url) -> tauri::Result<()> {
         window = window
             .title_bar_style(tauri::TitleBarStyle::Overlay)
             .hidden_title(true)
-            .traffic_light_position(tauri::LogicalPosition::new(15., 12.));
+            .traffic_light_position(tauri::LogicalPosition::new(15., 16.));
         let version = objc2_foundation::NSProcessInfo::processInfo().operatingSystemVersion();
         window = if version.majorVersion >= 14 {
             window.data_store_identifier(fingerprint[..16].try_into().unwrap())
@@ -82,10 +83,12 @@ fn open_window(app: &AppHandle, server: &Url) -> tauri::Result<()> {
     }
     #[cfg(not(target_os = "macos"))]
     {
+        use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+        let fingerprint = URL_SAFE_NO_PAD.encode(fingerprint);
         let directory = app
             .path()
             .app_local_data_dir()?
-            .join(format!("server-{fingerprint:x}"));
+            .join(format!("server-{fingerprint}"));
         window = window.decorations(false).data_directory(directory);
     }
     window.build()?;
@@ -118,10 +121,23 @@ async fn connect_server(
     let address = server::parse(&address)?;
     server::verify(&transport.client, &address).await?;
     server::save(&app, &address).map_err(|_| "Could not save the server address. Try again.")?;
-    transport.select(address.clone());
+    transport
+        .select(&app, address.clone())
+        .map_err(|_| "Could not open the IRCord session.")?;
     open_window(&app, &address).map_err(|_| "Could not open IRCord. Try again.")?;
     let _ = window.close();
     Ok(())
+}
+
+#[tauri::command]
+async fn choose_server(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("Open the IRCord workspace first.".into());
+    }
+    setup_window(&app).map_err(|_| "Could not open the server chooser.")?;
+    window
+        .destroy()
+        .map_err(|_| "Could not close the IRCord window.".into())
 }
 
 fn main() {
@@ -132,6 +148,7 @@ fn main() {
         .manage(Transport::new().expect("Create the native IRCord client"))
         .invoke_handler(tauri::generate_handler![
             connect_server,
+            choose_server,
             transport::api_request,
             transport::cancel_request,
             transport::open_socket,
@@ -146,7 +163,8 @@ fn main() {
             notifications::listen(app.handle())?;
             match server::configured(app.handle()) {
                 Ok(Some(server)) => {
-                    app.state::<Transport>().select(server.clone());
+                    app.state::<Transport>()
+                        .select(app.handle(), server.clone())?;
                     if open_window(app.handle(), &server).is_err() {
                         show_error(app.handle());
                     }

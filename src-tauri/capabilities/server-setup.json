@@ -1,6 +1,6 @@
 {
   "identifier": "server-setup",
-  "description": "Only the local setup window can select the IRCord server.",
+  "description": "Server selection and the notification plugin's startup permission check.",
   "windows": ["setup"],
-  "permissions": ["allow-connect-server"]
+  "permissions": ["allow-connect-server", "notification:allow-is-permission-granted"]
 }

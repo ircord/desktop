@@ -11,3 +11,4 @@
 ### Improved
 
 - Move and control the IRCord window from the top of the app.
+- Stay signed in between launches and switch IRCord servers from the app.

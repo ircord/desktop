@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { webkit } from '../../frontend/node_modules/playwright/index.mjs'
 
+const assets = resolve(import.meta.dirname, '../src-tauri/frontend-dist')
+const server = Bun.serve({
+  hostname: '127.0.0.1',
+  port: 0,
+  async fetch(request) {
+    const path = new URL(request.url).pathname
+    const file = Bun.file(resolve(assets, `.${path}`))
+    return await file.exists() ? new Response(file) : new Response(null, { status: 404 })
+  },
+})
 const browser = await webkit.launch()
 try {
   const page = await browser.newPage({ viewport: { width: 820, height: 600 }, colorScheme: 'dark' })
@@ -16,7 +25,8 @@ try {
       },
     }
   })
-  await page.goto(pathToFileURL(resolve(import.meta.dirname, '../setup/index.html')).href)
+  await page.goto(new URL('/desktop-setup/index.html', server.url).href)
+  assert(await page.locator('img').first().evaluate((image) => image.complete && image.naturalWidth > 0))
   const address = page.getByRole('textbox', { name: 'Server address' })
   const submit = page.getByRole('button', { name: 'Continue' })
   assert.equal(await address.inputValue(), 'https://chat.ircord.com')
@@ -44,4 +54,5 @@ try {
   console.log('Server setup layout, default address, keyboard submission, and error recovery verified.')
 } finally {
   await browser.close()
+  server.stop(true)
 }

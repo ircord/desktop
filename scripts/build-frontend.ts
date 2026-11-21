@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { cpSync, lstatSync, mkdirSync, mkdtempSync, readlinkSync, realpathSync, rmSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
 
 const desktop = resolve(import.meta.dir, '..')
@@ -71,5 +71,10 @@ try {
   cpSync(resolve(staging, 'public'), output, { recursive: true, dereference: true })
   cpSync(resolve(desktop, 'setup'), resolve(output, 'desktop-setup'), { recursive: true })
 } finally {
+  const dist = resolve(frontend, 'dist')
+  if (
+    lstatSync(dist, { throwIfNoEntry: false })?.isSymbolicLink() &&
+    resolve(frontend, readlinkSync(dist)) === resolve(staging, 'public')
+  ) unlinkSync(dist)
   rmSync(staging, { recursive: true, force: true })
 }

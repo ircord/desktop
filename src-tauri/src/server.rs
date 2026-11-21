@@ -20,7 +20,16 @@ pub fn parse(address: &str) -> Result<Url, &'static str> {
 }
 
 fn config_file(app: &AppHandle) -> tauri::Result<PathBuf> {
-    Ok(app.path().app_config_dir()?.join("server"))
+    let name = if hot_reload(app) {
+        "server-dev"
+    } else {
+        "server"
+    };
+    Ok(app.path().app_config_dir()?.join(name))
+}
+
+fn hot_reload(app: &AppHandle) -> bool {
+    tauri::is_dev() && app.config().build.dev_url.is_some()
 }
 
 pub fn configured(app: &AppHandle) -> Result<Option<Url>, Box<dyn std::error::Error>> {
@@ -31,6 +40,9 @@ pub fn configured(app: &AppHandle) -> Result<Option<Url>, Box<dyn std::error::Er
     }
     match fs::read_to_string(config_file(app)?) {
         Ok(address) => Ok(parse(&address).ok()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound && hot_reload(app) => {
+            Ok(Some(Url::parse("http://127.0.0.1:8080")?))
+        }
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error.into()),
     }
@@ -39,7 +51,7 @@ pub fn configured(app: &AppHandle) -> Result<Option<Url>, Box<dyn std::error::Er
 pub fn save(app: &AppHandle, address: &Url) -> Result<(), Box<dyn std::error::Error>> {
     let path = config_file(app)?;
     fs::create_dir_all(path.parent().unwrap())?;
-    let staging = path.with_file_name(format!("server.{}.tmp", std::process::id()));
+    let staging = path.with_extension(format!("{}.tmp", std::process::id()));
     fs::write(&staging, address.origin().ascii_serialization())?;
     fs::rename(staging, path)?;
     Ok(())
