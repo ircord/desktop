@@ -29,11 +29,12 @@ let browser
 try {
   browser = await webkit.launch()
   for (const titleBar of ['macos', 'windows', 'linux']) {
-    const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1200, height: 780 } })
+    const context = await browser.newContext({ serviceWorkers: 'block', reducedMotion: 'reduce', viewport: { width: 1200, height: 780 } })
     const page = await context.newPage()
     page.setDefaultTimeout(12_000)
     const seen = new Map()
     const sockets = new Map()
+    const testNotifications = []
     let cookie = ''
     let frames = 0
     let synced = false
@@ -81,7 +82,9 @@ try {
       }
       if (command === 'send_socket') sockets.get(args.id)?.send(args.data)
       if (command === 'close_socket') sockets.get(args.id)?.close()
-      if (command === 'notification_permission') return 'granted'
+      if (command === 'notification_permission' || command === 'request_notification_permission')
+        return 'granted'
+      if (command === 'show_notification') testNotifications.push(args)
     })
     await context.addInitScript(({ titleBar, serverOrigin }) => {
       window.__IRCordDesktop = { titleBar, serverOrigin }
@@ -160,6 +163,25 @@ try {
       const checked = titleBar !== 'windows'
       await page.reload()
       await toggle.and(dialog.locator(`[aria-checked="${checked}"]`)).waitFor()
+      await dialog.locator('[data-section="account"]').click()
+      const sessions = dialog.locator('[data-setting="device-sessions"]')
+      const os = { macos: 'macOS', windows: 'Windows', linux: 'Linux' }[titleBar]
+      await sessions.getByText(`IRCord Desktop on ${os}`, { exact: false }).first().waitFor()
+      const status = dialog.locator('[data-setting="notifications-status"]')
+      await dialog.locator('[data-section="notifications"]').click()
+      assert.equal(await status.count(), 0)
+      await dialog.getByRole('combobox', { name: 'Search settings' }).fill('notification setup')
+      await dialog.getByRole('option', { name: /Notification setup on this device.*Device/ }).click()
+      await status.waitFor()
+      assert.equal(await dialog.locator('[data-section="device"]').getAttribute('aria-current'), 'page')
+      assert.equal(await sessions.count(), 0)
+      await status.getByRole('button', { name: 'Enable notifications' }).click()
+      await dialog.getByRole('button', { name: 'Send test' }).click()
+      await dialog.getByText(/^Sent\. It should arrive/).waitFor()
+      assert.equal(testNotifications.length, 1)
+      assert.equal(testNotifications[0].body, 'This is a test notification.')
+      if (process.env.IRCORD_DESKTOP_TEST_SHOTS)
+        await page.screenshot({ path: resolve(process.env.IRCORD_DESKTOP_TEST_SHOTS, `ircord-${titleBar}-device.png`), animations: 'disabled' })
       await page.keyboard.press('Escape')
       await toolbar.click({ position: { x: 500, y: 12 } })
       assert.deepEqual(await page.evaluate(() => window.windowActions), ['drag'])
@@ -172,8 +194,19 @@ try {
       }
       if (process.env.IRCORD_DESKTOP_TEST_SHOTS)
         await page.screenshot({ path: resolve(process.env.IRCORD_DESKTOP_TEST_SHOTS, `ircord-${titleBar}.png`) })
+      if (titleBar === 'macos') {
+        await page.setViewportSize({ width: 420, height: 720 })
+        await page.getByRole('button', { name: 'User settings' }).click()
+        await dialog.locator('[data-section="device"]').click()
+        const narrow = page.getByRole('dialog', { name: 'Device', exact: true })
+        await narrow.getByRole('button', { name: 'Send test' }).waitFor()
+        if (process.env.IRCORD_DESKTOP_TEST_SHOTS)
+          await page.screenshot({ path: resolve(process.env.IRCORD_DESKTOP_TEST_SHOTS, 'ircord-narrow-device.png'), animations: 'disabled' })
+        await narrow.getByRole('button', { name: 'Back to Settings' }).click()
+        await dialog.locator('[data-section="device"]').waitFor()
+      }
       assert.deepEqual(errors, [])
-      console.log(`${titleBar} shell, server chooser, sign-in, saved privacy settings, and private events verified.`)
+      console.log(`${titleBar} shell, device settings, sign-in, saved privacy settings, and private events verified.`)
     } catch (error) {
       if (process.env.IRCORD_DESKTOP_TEST_SHOTS)
         await page.screenshot({ path: resolve(process.env.IRCORD_DESKTOP_TEST_SHOTS, `ircord-${titleBar}-failure.png`) })

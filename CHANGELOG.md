@@ -12,3 +12,8 @@
 
 - Move and control the IRCord window from the top of the app.
 - Stay signed in between launches and switch IRCord servers from the app.
+- Copy messages, links, drafts, and code to the system clipboard.
+
+### Fixed
+
+- Connect to a local server using an HTTP address with `localhost`.

@@ -43,12 +43,12 @@ try {
   await page.setViewportSize({ width: 340, height: 350 })
   await page.emulateMedia({ colorScheme: 'light' })
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth === innerWidth), true)
-  await address.fill('https://myamazingsetup.com')
+  await address.fill('http://localhost:8080')
   assert.equal(await page.getByRole('alert').textContent(), '')
   await address.press('Enter')
   assert.deepEqual(await page.evaluate(() => window.connection), {
     command: 'connect_server',
-    address: 'https://myamazingsetup.com',
+    address: 'http://localhost:8080',
   })
   assert.equal(await page.getByRole('button', { name: 'Connecting…' }).isDisabled(), true)
   console.log('Server setup layout, default address, keyboard submission, and error recovery verified.')

@@ -24,7 +24,7 @@ On first launch, enter the address of your IRCord server. The app suggests `http
 The app remembers your server and sign-in between launches.
 Select **Change IRCord server** from the sign-in screen or your profile menu to choose another server.
 Set `IRCORD_DESKTOP_BACKEND_URL` before launching the executable to supply the address ahead of time.
-The app accepts HTTPS server addresses and local HTTP addresses on `127.0.0.1`.
+The app accepts HTTPS server addresses and local HTTP addresses on `localhost` or `127.0.0.1`.
 Each server has its own browser data. On macOS versions before 14, the app uses temporary browser data.
 
 Run `bun tauri dev` in `desktop/` for frontend hot reload on port 4789.

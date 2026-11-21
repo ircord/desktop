@@ -15,6 +15,7 @@
     "allow-show-notification",
     "allow-focus-notification-window",
     "notification:allow-is-permission-granted",
+    "clipboard-manager:allow-write-text",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
     "core:window:allow-start-dragging",

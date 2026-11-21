@@ -2,7 +2,7 @@ use std::{fs, io, path::PathBuf};
 use tauri::{AppHandle, Manager, Url};
 
 pub fn parse(address: &str) -> Result<Url, &'static str> {
-    let address = Url::parse(address.trim()).map_err(|_| "Enter a complete server address.")?;
+    let mut address = Url::parse(address.trim()).map_err(|_| "Enter a complete server address.")?;
     if !address.username().is_empty()
         || address.password().is_some()
         || address.path() != "/"
@@ -11,10 +11,16 @@ pub fn parse(address: &str) -> Result<Url, &'static str> {
     {
         return Err("Enter the server address without a path or sign-in details.");
     }
+    // Use the same native session for the two spellings of the local backend.
+    if address.scheme() == "http" && address.host_str() == Some("localhost") {
+        address
+            .set_host(Some("127.0.0.1"))
+            .map_err(|_| "Enter a complete server address.")?;
+    }
     if !(address.scheme() == "https"
         || (address.scheme() == "http" && address.host_str() == Some("127.0.0.1")))
     {
-        return Err("Use an HTTPS server address.");
+        return Err("Use HTTPS, or use HTTP for a local server.");
     }
     Ok(address)
 }
@@ -110,10 +116,19 @@ mod tests {
     }
 
     #[test]
+    fn localhost_uses_the_same_origin_as_the_loopback_address() {
+        assert_eq!(
+            parse("http://localhost:8080").unwrap(),
+            parse("http://127.0.0.1:8080").unwrap()
+        );
+    }
+
+    #[test]
     fn requires_an_origin_with_safe_transport() {
         for address in [
             "chat.ircord.com",
             "http://chat.ircord.com",
+            "http://localhost.example.com:8080",
             "file:///",
             "https://name:password@example.com",
             "https://example.com/chat",
