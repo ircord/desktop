@@ -6,6 +6,7 @@ const backend = new URL(process.argv[2])
 assert.equal(backend.origin, `http://127.0.0.1:${backend.port}`, 'Use a disposable Go backend.')
 const assets = resolve(import.meta.dirname, '../src-tauri/frontend-dist')
 assert(!(await Bun.file(resolve(assets, 'server/index.mjs')).exists()))
+const styleNonce = 'ircord-test'
 const server = Bun.serve({
   hostname: '127.0.0.1',
   port: 0,
@@ -13,8 +14,16 @@ const server = Bun.serve({
     const path = new URL(request.url).pathname
     if (path.startsWith('/api/')) return new Response(null, { status: 404 })
     const file = Bun.file(resolve(assets, `.${path}${path.endsWith('/') ? 'index.html' : ''}`))
-    if (await file.exists()) return new Response(file)
-    return new Response(Bun.file(resolve(assets, 'index.html')))
+    const asset = await file.exists() ? file : Bun.file(resolve(assets, 'index.html'))
+    if (!asset.type.startsWith('text/html')) return new Response(asset)
+    // Tauri authorizes the styles embedded in the HTML with a nonce.
+    const html = (await asset.text()).replace(/<style(?=[\s>])/g, `<style nonce="${styleNonce}"`)
+    return new Response(html, {
+      headers: {
+        'Content-Type': asset.type,
+        'Content-Security-Policy': `style-src 'self' 'unsafe-inline' 'nonce-${styleNonce}'`,
+      },
+    })
   },
 })
 
@@ -133,6 +142,25 @@ try {
       await page.getByLabel('Password', { exact: true }).fill(credentials.password)
       await page.getByRole('button', { name: 'Sign in', exact: true }).click()
       await page.locator('.workspace').waitFor()
+      const themeHost = page.locator('[data-ircord-theme-layer]')
+      await themeHost.locator('.layer').waitFor({ state: 'attached' })
+      const themeLayer = await themeHost.evaluate((host) => {
+        const bounds = host.getBoundingClientRect()
+        const css = getComputedStyle(host)
+        const shadowLayer = host.shadowRoot.querySelector('.layer')
+        return {
+          coversViewport: bounds.width === innerWidth && bounds.height === innerHeight,
+          border: css.borderTopWidth,
+          pointerEvents: css.pointerEvents,
+          shadowPosition: getComputedStyle(shadowLayer).position,
+        }
+      })
+      assert.deepEqual(themeLayer, {
+        coversViewport: true,
+        border: '0px',
+        pointerEvents: 'none',
+        shadowPosition: 'fixed',
+      }, 'The theme overlay keeps its styles under the desktop style policy.')
       for (let attempt = 0; !synced && attempt < 50; attempt++) await Bun.sleep(100)
       assert(frames > 0, 'The selected Go server sent authenticated events.')
       assert(synced, 'The client resumed the private event stream.')
