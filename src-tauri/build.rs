@@ -1,5 +1,6 @@
 fn main() {
     let manifest = tauri_build::AppManifest::new().commands(&[
+        "check_server",
         "connect_server",
         "choose_server",
         "api_request",

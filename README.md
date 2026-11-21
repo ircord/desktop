@@ -18,6 +18,7 @@ See [releases](https://github.com/ircord/desktop/releases) for release notes and
 ## Connect to IRCord
 
 Open the app and choose an IRCord server. The suggested address is `https://chat.ircord.com`.
+Select **Check server** to verify the address and see the server’s registration policy. Select **Continue** to sign in.
 IRCord remembers your server and sign-in between launches. Select **Change IRCord server** from the sign-in screen or your profile menu to switch servers.
 
 ## Build from source

@@ -35,7 +35,7 @@
 body {
   min-height: 100vh;
   margin: 0;
-  padding: 24px 16px;
+  padding: 20px 16px;
   display: grid;
   place-items: center;
   color: var(--ink);
@@ -101,13 +101,5 @@ button:disabled { opacity: 0.72; cursor: progress; }
 input:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 ::selection { color: var(--button-text); background: var(--accent); }
 #server-error { color: var(--error); font-size: 13px; }
-#server-error:empty { margin-bottom: -8px; }
-
-.visually-hidden {
-  clip-path: inset(50%);
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  white-space: nowrap;
-}
+#server-status { font-size: 13px; }
+#server-error:empty, #server-status:empty { margin-bottom: -8px; }

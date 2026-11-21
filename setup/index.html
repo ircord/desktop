@@ -14,12 +14,12 @@
       <p>Use the public IRCord server or enter your own server address.</p>
       <form>
         <label for="server-address">Server address</label>
-        <input id="server-address" name="server" type="url" value="https://chat.ircord.com"
+        <input id="server-address" name="server" type="text" inputmode="url" value="https://chat.ircord.com"
           autocomplete="url" autocapitalize="none" spellcheck="false" maxlength="2048"
-          aria-describedby="server-error" required>
+          aria-describedby="server-status server-error" required>
+        <p id="server-status" role="status"></p>
         <p id="server-error" role="alert"></p>
-        <button type="submit">Continue</button>
-        <p id="progress" role="status" class="visually-hidden"></p>
+        <button type="submit">Check server</button>
       </form>
     </main>
   </body>

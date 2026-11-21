@@ -104,6 +104,34 @@ fn show_error(app: &AppHandle) {
         .show(move |_| exit.exit(1));
 }
 
+#[derive(serde::Serialize)]
+struct ServerPreview {
+    origin: String,
+    registration: server::Registration,
+}
+
+#[tauri::command]
+async fn check_server(
+    app: AppHandle,
+    window: WebviewWindow,
+    address: String,
+) -> Result<ServerPreview, String> {
+    if window.label() != "setup" {
+        return Err("Open the server setup window first.".into());
+    }
+    let transport = app.state::<Transport>();
+    let _connecting = transport
+        .connecting
+        .try_lock()
+        .map_err(|_| "The server is already being checked.")?;
+    let address = server::parse(&address)?;
+    let registration = server::verify(&transport.client, &address).await?;
+    Ok(ServerPreview {
+        origin: address.origin().ascii_serialization(),
+        registration,
+    })
+}
+
 #[tauri::command]
 async fn connect_server(
     app: AppHandle,
@@ -148,6 +176,7 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .manage(Transport::new().expect("Create the native IRCord client"))
         .invoke_handler(tauri::generate_handler![
+            check_server,
             connect_server,
             choose_server,
             transport::api_request,

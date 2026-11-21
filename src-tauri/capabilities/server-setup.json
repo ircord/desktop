@@ -2,5 +2,5 @@
   "identifier": "server-setup",
   "description": "Server selection and the notification plugin's startup permission check.",
   "windows": ["setup"],
-  "permissions": ["allow-connect-server", "notification:allow-is-permission-granted"]
+  "permissions": ["allow-check-server", "allow-connect-server", "notification:allow-is-permission-granted"]
 }

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Improved
+
+- Check that a server runs IRCord before opening sign-in, and see whether you can create an account there.
+
 ## v0.1.0 — 2026-11-21
 
 ### New
