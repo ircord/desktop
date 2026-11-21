@@ -59,12 +59,10 @@ mod native {
             let builder = app.updater_builder().timeout(Duration::from_secs(30));
             #[cfg(target_os = "windows")]
             let builder = {
-                use tauri_plugin_window_state::{AppHandleExt, StateFlags};
+                use tauri_plugin_window_state::AppHandleExt;
                 let app = app.clone();
                 builder.on_before_exit(move || {
-                    let _ = app.save_window_state(
-                        StateFlags::SIZE | StateFlags::POSITION | StateFlags::MAXIMIZED,
-                    );
+                    let _ = app.save_window_state(crate::WORKSPACE_STATE);
                     app.cleanup_before_exit();
                 })
             };

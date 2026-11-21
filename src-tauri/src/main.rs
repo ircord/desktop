@@ -16,7 +16,12 @@ use tauri::{
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_window_state::StateFlags;
 use transport::Transport;
+
+const WORKSPACE_STATE: StateFlags = StateFlags::SIZE
+    .union(StateFlags::POSITION)
+    .union(StateFlags::MAXIMIZED);
 
 const TITLE_BAR: &str = if cfg!(target_os = "macos") {
     "macos"
@@ -118,9 +123,9 @@ fn open_or_focus(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
         .get_webview_window("setup")
         .or_else(|| app.get_webview_window("main"))
     {
-        window.unminimize()?;
-        window.show()?;
-        window.set_focus()?;
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
     } else if let Some(server) = server::configured(app)? {
         app.state::<Transport>().select(app, server.clone())?;
         open_window(app, &server)?;
@@ -212,11 +217,7 @@ fn main() {
         .plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_denylist(&["setup"])
-                .with_state_flags(
-                    tauri_plugin_window_state::StateFlags::SIZE
-                        | tauri_plugin_window_state::StateFlags::POSITION
-                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
-                )
+                .with_state_flags(WORKSPACE_STATE)
                 .build(),
         );
     #[cfg(any(target_os = "macos", target_os = "windows"))]
