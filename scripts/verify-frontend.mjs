@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 import { webkit } from '../../frontend/node_modules/playwright/index.mjs'
+import { compileAppearance, sanitizeAppearance } from '../../frontend/shared/appearance.ts'
 
 const backend = new URL(process.argv[2])
 assert.equal(backend.origin, `http://127.0.0.1:${backend.port}`, 'Use a disposable Go backend.')
@@ -34,9 +35,49 @@ const signup = await fetch(new URL('/api/v1/auth/signup', backend), {
   body: JSON.stringify(credentials),
 })
 assert.equal(signup.status, 201)
+const seedCookie = signup.headers.getSetCookie().find((value) => value.startsWith('ircord_session='))
+assert(seedCookie, 'Sign-up created a session to save the account appearance.')
+const settings = sanitizeAppearance({
+  mode: 'dark', schemeDark: 'hibiki-dark', accent: 'fuchsia', messageFont: 'geist-mono',
+})
+const compiled = compileAppearance(settings, 'dark')
+const saved = await fetch(new URL('/api/v1/app/appearance', backend), {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json', Cookie: seedCookie.split(';')[0] },
+  body: JSON.stringify({ settings }),
+})
+assert.equal(saved.status, 200)
+
+async function verifyAppearance(page) {
+  await page.locator('html[data-scheme="hibiki"]').waitFor({ state: 'attached' })
+  const look = await page.evaluate(() => {
+    const style = getComputedStyle(document.documentElement)
+    return {
+      accent: style.getPropertyValue('--accent').trim(),
+      background: style.getPropertyValue('--main').trim(),
+      messageFont: style.getPropertyValue('--font-message'),
+    }
+  })
+  assert.equal(look.accent, compiled.tokens.accent, 'Use the synced accent under the desktop style policy.')
+  assert.equal(look.background, compiled.tokens.main, 'Use the synced desktop palette.')
+  assert.match(look.messageFont, /Geist Mono/, 'Use the synced message font.')
+}
+
 let browser
 try {
   browser = await webkit.launch()
+  const bootPage = await browser.newPage()
+  try {
+    await bootPage.route('**/_nuxt/*.js', (route) => route.abort())
+    await bootPage.addInitScript(({ css, attrs }) => {
+      localStorage.setItem('ircord.appearance.compiled', JSON.stringify({ mode: 'dark', dark: { css, attrs } }))
+    }, { css: compiled.css, attrs: compiled.attrs })
+    await bootPage.goto(server.url.href)
+    await verifyAppearance(bootPage)
+  } finally {
+    await bootPage.close()
+  }
+
   for (const titleBar of ['macos', 'windows', 'linux']) {
     const context = await browser.newContext({ serviceWorkers: 'block', reducedMotion: 'reduce', viewport: { width: 1200, height: 780 } })
     const page = await context.newPage()
@@ -149,6 +190,7 @@ try {
       await page.getByLabel('Password', { exact: true }).fill(credentials.password)
       await page.getByRole('button', { name: 'Sign in', exact: true }).click()
       await page.locator('.workspace').waitFor()
+      await verifyAppearance(page)
       const themeHost = page.locator('[data-ircord-theme-layer]')
       await themeHost.locator('.layer').waitFor({ state: 'attached' })
       const themeLayer = await themeHost.evaluate((host) => {
