@@ -16,8 +16,8 @@
       "csp": {
         "default-src": "'self'",
         "script-src": "'self' 'wasm-unsafe-eval'",
-        "style-src": "'self' 'unsafe-inline'",
-        "connect-src": "'self' ipc: http://ipc.localhost https://api.klipy.com https://static.klipy.com https://media.klipy.com https://cdn.klipy.com https://huggingface.co https://*.hf.co",
+        "style-src": "'self'",
+        "connect-src": "'self' ipc: http://ipc.localhost https://api.klipy.com https://static.klipy.com https://media.klipy.com https://cdn.klipy.com https://media.giphy.com https://i.giphy.com https://media.tenor.com https://i.imgur.com https://huggingface.co https://*.hf.co",
         "img-src": "'self' data: blob: https: http://127.0.0.1:*",
         "media-src": "'self' blob: https: http://127.0.0.1:*",
         "frame-src": "'self' https:",

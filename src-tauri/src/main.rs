@@ -3,6 +3,7 @@
 mod notifications;
 mod server;
 mod session;
+mod speech;
 mod transport;
 mod tray;
 mod updates;
@@ -52,6 +53,7 @@ fn open_window(app: &AppHandle, server: &Url) -> tauri::Result<()> {
         "titleBar": TITLE_BAR,
         "version": app.package_info().version.to_string(),
         "canCheckForUpdates": updates::available(),
+        "supportsSpeechService": true,
     });
     let desktop_marker = format!(
         "Object.defineProperty(window, '__IRCordDesktop', {{ value: Object.freeze({marker}) }});"
@@ -232,6 +234,7 @@ fn main() {
             choose_server,
             transport::api_request,
             transport::cancel_request,
+            speech::speech_request,
             transport::open_socket,
             transport::send_socket,
             transport::close_socket,

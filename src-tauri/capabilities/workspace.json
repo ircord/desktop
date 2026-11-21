@@ -8,6 +8,7 @@
     "allow-check-for-updates",
     "allow-api-request",
     "allow-cancel-request",
+    "allow-speech-request",
     "allow-open-socket",
     "allow-send-socket",
     "allow-close-socket",

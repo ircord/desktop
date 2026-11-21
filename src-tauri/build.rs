@@ -6,6 +6,7 @@ fn main() {
         "choose_server",
         "api_request",
         "cancel_request",
+        "speech_request",
         "open_socket",
         "send_socket",
         "close_socket",

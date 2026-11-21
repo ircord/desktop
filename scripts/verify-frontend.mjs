@@ -1,11 +1,16 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { webkit } from '../../frontend/node_modules/playwright/index.mjs'
 import { compileAppearance, sanitizeAppearance } from '../../frontend/shared/appearance.ts'
+import { gifFetchHosts } from '../../frontend/shared/utils/gif-hosts.ts'
 
 const backend = new URL(process.argv[2])
 assert.equal(backend.origin, `http://127.0.0.1:${backend.port}`, 'Use a disposable Go backend.')
 const assets = resolve(import.meta.dirname, '../src-tauri/frontend-dist')
+const { app: { security: { csp } } } = await Bun.file(
+  resolve(import.meta.dirname, '../src-tauri/tauri.conf.json'),
+).json()
 assert(!(await Bun.file(resolve(assets, 'server/index.mjs')).exists()))
 const styleNonce = 'ircord-test'
 const server = Bun.serve({
@@ -19,10 +24,18 @@ const server = Bun.serve({
     if (!asset.type.startsWith('text/html')) return new Response(asset)
     // Tauri authorizes the styles embedded in the HTML with a nonce.
     const html = (await asset.text()).replace(/<style(?=[\s>])/g, `<style nonce="${styleNonce}"`)
+    const scriptHashes = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/g)]
+      .filter(([, code]) => code)
+      .map(([, code]) => `'sha256-${createHash('sha256').update(code).digest('base64')}'`)
+    const policy = {
+      ...csp,
+      'script-src': [csp['script-src'], ...scriptHashes].join(' '),
+      'style-src': `${csp['style-src']} 'nonce-${styleNonce}'`,
+    }
     return new Response(html, {
       headers: {
         'Content-Type': asset.type,
-        'Content-Security-Policy': `style-src 'self' 'unsafe-inline' 'nonce-${styleNonce}'`,
+        'Content-Security-Policy': Object.entries(policy).map(([key, value]) => `${key} ${value}`).join('; '),
       },
     })
   },
@@ -47,6 +60,13 @@ const saved = await fetch(new URL('/api/v1/app/appearance', backend), {
   body: JSON.stringify({ settings }),
 })
 assert.equal(saved.status, 200)
+const speech = { baseUrl: 'https://speech.example.test/v1', model: 'test-model', voice: 'test-voice' }
+const savedSpeech = await fetch(new URL('/api/v1/app/preferences', backend), {
+  method: 'PUT',
+  headers: { 'Content-Type': 'application/json', Cookie: seedCookie.split(';')[0] },
+  body: JSON.stringify({ preferences: { speech } }),
+})
+assert.equal(savedSpeech.status, 200)
 
 async function verifyAppearance(page) {
   await page.locator('html[data-scheme="hibiki"]').waitFor({ state: 'attached' })
@@ -85,6 +105,7 @@ try {
     const seen = new Map()
     const sockets = new Map()
     const testNotifications = []
+    const speechRequests = []
     let updateChecks = 0
     let cookie = ''
     let frames = 0
@@ -137,6 +158,10 @@ try {
         return 'granted'
       if (command === 'show_notification') testNotifications.push(args)
       if (command === 'check_for_updates') updateChecks++
+      if (command === 'speech_request') {
+        speechRequests.push(args.request)
+        return { status: 403, audio: '' }
+      }
     })
     await context.addInitScript(({ titleBar, serverOrigin }) => {
       window.__IRCordDesktop = {
@@ -144,7 +169,12 @@ try {
         serverOrigin,
         version: '0.1.2',
         canCheckForUpdates: titleBar !== 'linux',
+        supportsSpeechService: true,
       }
+      window.cspViolations = []
+      document.addEventListener('securitypolicyviolation', ({ effectiveDirective, blockedURI }) => {
+        window.cspViolations.push(`${effectiveDirective}: ${blockedURI}`)
+      })
       window.windowActions = []
       window.desktopChannels = new Map()
       let maximized = false
@@ -184,6 +214,13 @@ try {
         if (new URL(request.url()).pathname.startsWith('/api/')) browserApiRequests++
       })
       await page.goto(server.url.href)
+      if (titleBar === 'macos') {
+        for (const host of gifFetchHosts) {
+          const url = `${host}/ircord-csp-fixture.gif`
+          await page.route(url, (route) => route.fulfill({ body: 'GIF', headers: { 'Access-Control-Allow-Origin': '*' } }))
+          assert.equal(await page.evaluate(async (url) => (await fetch(url)).text(), url), 'GIF')
+        }
+      }
       await page.getByRole('button', { name: 'Change IRCord server' }).click()
       assert.deepEqual(await page.evaluate(() => window.windowActions), ['choose'])
       await page.getByLabel('Username', { exact: true }).fill(credentials.username)
@@ -247,6 +284,13 @@ try {
       const status = dialog.locator('[data-setting="notifications-status"]')
       await dialog.locator('[data-section="notifications"]').click()
       assert.equal(await status.count(), 0)
+      const speechTest = dialog.locator('[data-setting="speech-test"]')
+      await speechTest.getByRole('button', { name: 'Test', exact: true }).click()
+      await speechTest.getByRole('status').getByText(/refused the API key/).waitFor()
+      assert.equal(speechRequests.length, 1)
+      assert.equal(speechRequests[0].baseUrl, speech.baseUrl)
+      assert.equal(speechRequests[0].model, speech.model)
+      assert.equal(speechRequests[0].voice, speech.voice)
       await dialog.getByRole('combobox', { name: 'Search settings' }).fill('notification setup')
       await dialog.getByRole('option', { name: /Notification setup on this device.*Device/ }).click()
       await status.waitFor()
@@ -296,6 +340,7 @@ try {
         await dialog.locator('[data-section="device"]').waitFor()
       }
       assert.deepEqual(errors, [])
+      assert.deepEqual(await page.evaluate(() => window.cspViolations), [])
       console.log(`${titleBar} shell, device settings, sign-in, saved privacy settings, and private events verified.`)
     } catch (error) {
       if (process.env.IRCORD_DESKTOP_TEST_SHOTS)

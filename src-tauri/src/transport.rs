@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
+    future::Future,
     sync::{Mutex, RwLock},
     time::Duration,
 };
@@ -60,7 +61,7 @@ impl Transport {
         Ok(())
     }
 
-    fn server(&self, window: &WebviewWindow) -> Result<Url, &'static str> {
+    pub fn server(&self, window: &WebviewWindow) -> Result<Url, &'static str> {
         if window.label() != "main" {
             return Err("Open the IRCord workspace first.");
         }
@@ -72,7 +73,7 @@ impl Transport {
             .ok_or("Select an IRCord server first.")
     }
 
-    fn session(&self, server: &Url) -> Option<header::HeaderValue> {
+    pub fn session(&self, server: &Url) -> Option<header::HeaderValue> {
         self.server
             .read()
             .unwrap()
@@ -93,6 +94,21 @@ impl Transport {
                 .map_err(|_| "Could not save the IRCord session.")?;
         }
         Ok(())
+    }
+
+    pub async fn cancellable<T>(
+        &self,
+        id: String,
+        request: impl Future<Output = Result<T, &'static str>>,
+    ) -> Result<T, &'static str> {
+        let (cancel, cancelled) = oneshot::channel();
+        self.requests.lock().unwrap().insert(id.clone(), cancel);
+        let result = tokio::select! {
+            _ = cancelled => Err("The request was cancelled."),
+            result = request => result,
+        };
+        self.requests.lock().unwrap().remove(&id);
+        result
     }
 }
 
@@ -197,35 +213,46 @@ pub async fn api_request(
         }
         upstream = upstream.body(body);
     }
-    let (cancel, cancelled) = oneshot::channel();
     transport
-        .requests
-        .lock()
-        .unwrap()
-        .insert(request.id.clone(), cancel);
-    let result = tokio::select! {
-        _ = cancelled => Err("The IRCord request was cancelled."),
-        result = async {
+        .cancellable(request.id, async {
             let response = upstream.send().await.map_err(|_| OFFLINE)?;
             if request.credentials {
                 transport.store_session(&server, response.headers())?;
             }
             let status = response.status().as_u16();
-            let headers = response.headers().iter().filter(|(key, _)| {
-                matches!(
-                    key.as_str(),
-                    "content-type" | "content-length" | "content-range" | "content-disposition" |
-                    "cache-control" | "etag" | "last-modified" | "location" | "retry-after"
-                )
-            }).filter_map(|(key, value)| {
-                value.to_str().ok().map(|value| (key.to_string(), value.to_owned()))
-            }).collect();
+            let headers = response
+                .headers()
+                .iter()
+                .filter(|(key, _)| {
+                    matches!(
+                        key.as_str(),
+                        "content-type"
+                            | "content-length"
+                            | "content-range"
+                            | "content-disposition"
+                            | "cache-control"
+                            | "etag"
+                            | "last-modified"
+                            | "location"
+                            | "retry-after"
+                    )
+                })
+                .filter_map(|(key, value)| {
+                    value
+                        .to_str()
+                        .ok()
+                        .map(|value| (key.to_string(), value.to_owned()))
+                })
+                .collect();
             let bytes = read_body(response, MAX_BODY).await?;
-            Ok(ApiResponse { status, headers, body: STANDARD.encode(bytes) })
-        } => result,
-    };
-    transport.requests.lock().unwrap().remove(&request.id);
-    result.map_err(str::to_owned)
+            Ok(ApiResponse {
+                status,
+                headers,
+                body: STANDARD.encode(bytes),
+            })
+        })
+        .await
+        .map_err(str::to_owned)
 }
 
 #[tauri::command]

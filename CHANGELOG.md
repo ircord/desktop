@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- Fix GIF pause for Giphy, Tenor, and Imgur in desktop webviews that support it.
+- Connect Read Aloud to your configured speech service.
+
 ## v0.1.2 — 2026-11-21
 
 ### New
