@@ -29,8 +29,10 @@ copyFileSync(bun, resolve(binaries, `ircord-bun-${host}${process.platform === 'w
 if (process.argv.includes('--dev')) {
   // Cargo resolves the bundle paths even though Tauri dev uses Vite.
   mkdirSync(output, { recursive: true })
-  const { build: { devUrl } } = await Bun.file(resolve(bundle, 'tauri.web.conf.json')).json()
-  const lock = await Bun.file(resolve(frontend, '.nuxt/nuxt.lock')).json().catch(() => null)
+  const { build: { devUrl } } = await Bun.file(resolve(bundle, 'tauri.conf.json')).json()
+  const { hostname, port } = new URL(devUrl)
+  const buildDir = resolve(frontend, '.data/desktop-nuxt')
+  const lock = await Bun.file(resolve(buildDir, 'nuxt.lock')).json().catch(() => null)
   if (
     lock?.command === 'dev' && lock.cwd === realpathSync(frontend) && lock.url === devUrl &&
     Number.isSafeInteger(lock.pid) && lock.pid > 0
@@ -47,7 +49,26 @@ if (process.argv.includes('--dev')) {
       // Nuxt owns stale lock recovery when there is no running frontend.
     }
   }
-  run([bun, 'run', 'dev'], frontend)
+  const occupied = await fetch(devUrl, { redirect: 'manual', signal: AbortSignal.timeout(1000) })
+    .then(async (response) => {
+      await response.body?.cancel()
+      return true
+    }, () => false)
+  if (occupied) throw new Error(`Port ${port} is already in use. Close that server before starting IRCord Desktop.`)
+
+  const configuredBackend = process.env.IRCORD_DESKTOP_BACKEND_URL
+  const backend = configuredBackend && new URL(configuredBackend)
+  if (backend && (
+    backend.username || backend.password || backend.pathname !== '/' || backend.search || backend.hash ||
+    (backend.protocol !== 'https:' && !(backend.protocol === 'http:' && backend.hostname === '127.0.0.1'))
+  )) throw new Error('Use an HTTPS server address or local HTTP on 127.0.0.1.')
+
+  run([bun, 'x', 'nuxt', 'dev', '--host', hostname, '--port', port], frontend, {
+    ...process.env,
+    IRCORD_DESKTOP_DEV_DIR: buildDir,
+    NUXT_SITE_URL: devUrl,
+    ...(backend && { NUXT_BACKEND_URL: backend.origin, NUXT_PUBLIC_INSTANCE_URL: backend.origin }),
+  })
   process.exit(0)
 }
 

@@ -1,0 +1,6 @@
+{
+  "build": {
+    "beforeDevCommand": { "script": "bun run build:frontend", "wait": true },
+    "devUrl": null
+  }
+}

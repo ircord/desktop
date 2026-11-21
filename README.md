@@ -26,10 +26,10 @@ Set `IRCORD_DESKTOP_BACKEND_URL` before launching the executable to supply the a
 The app accepts HTTPS server addresses and local HTTP addresses on `127.0.0.1`.
 Each server has its own browser data. On macOS versions before 14, the app uses temporary browser data.
 
-Run `bun tauri dev` in `desktop/` to test the desktop flow from a local frontend build.
-For frontend hot reload, start the Go backend with `make backend` in the workspace root.
-Run `bun run dev:web` in `desktop/` to open the Nuxt development frontend directly.
-If this checkout's Nuxt server already runs on port 3000, Tauri uses it.
+Run `bun tauri dev` in `desktop/` for frontend hot reload on port 4789.
+Start the Go backend with `make backend` in the workspace root.
+Set `IRCORD_DESKTOP_BACKEND_URL` when starting Tauri to use another backend in dev.
+Run `bun run dev:bundle` to test the server picker and packaged frontend.
 
 To check a macOS bundle in WebKit, start a disposable Go backend on `127.0.0.1:41987` with registration enabled.
 From `desktop/`, run the following command after installing the frontend's Playwright WebKit browser.

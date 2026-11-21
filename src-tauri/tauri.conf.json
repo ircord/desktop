@@ -4,7 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.ircord.desktop",
   "build": {
-    "beforeDevCommand": { "script": "bun run build:frontend", "wait": true },
+    "beforeDevCommand": "bun run dev:frontend",
+    "devUrl": "http://127.0.0.1:4789",
     "beforeBuildCommand": "bun run build:frontend",
     "frontendDist": "../setup"
   },

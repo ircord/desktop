@@ -24,6 +24,7 @@ const server = Bun.spawn([resolve(bun), '--no-env-file', resolve(entry)], {
     NUXT_PUBLIC_INSTANCE_URL: upstream.origin,
     IRCORD_DESKTOP_KEY: key,
   },
+  stdin: 'pipe',
   stderr: 'inherit',
   stdout: 'inherit',
 })
@@ -52,6 +53,28 @@ try {
 
   browser = await webkit.launch()
   const context = await browser.newContext({ serviceWorkers: 'block' })
+  const titleBar = process.env.IRCORD_TEST_TITLE_BAR
+  if (titleBar) {
+    await context.addInitScript((titleBar) => {
+      window.__IRCordDesktop = { titleBar }
+      window.windowActions = []
+      let maximized = false
+      window.__TAURI__ = {
+        core: { invoke: async () => 'granted' },
+        event: { listen: async () => () => {} },
+        window: {
+          getCurrentWindow: () => ({
+            isMaximized: async () => maximized,
+            isFullscreen: async () => false,
+            toggleMaximize: async () => { maximized = !maximized },
+            minimize: async () => window.windowActions.push('minimize'),
+            close: async () => window.windowActions.push('close'),
+            startResizeDragging: async (edge) => window.windowActions.push(edge),
+          }),
+        },
+      }
+    }, titleBar)
+  }
   await context.addCookies([
     { name: 'ircord_desktop', value: key, url: origin, httpOnly: true, sameSite: 'Strict' },
   ])
@@ -84,6 +107,23 @@ try {
   assert.equal((await page.request.get(`${origin}/api/app/preferences`)).status(), 200)
   await page.reload()
   await page.locator('.workspace').waitFor()
+  if (titleBar) {
+    const bar = page.locator('.desktop-titlebar')
+    const bounds = await bar.boundingBox()
+    const workspace = await page.locator('.workspace-bar').boundingBox()
+    assert.ok(bounds && workspace && bounds.y + bounds.height <= workspace.y)
+    assert.ok(await bar.getAttribute('data-tauri-drag-region') !== null)
+    if (titleBar !== 'macos') {
+      await bar.getByRole('button', { name: 'Maximize window' }).click()
+      await bar.getByRole('button', { name: 'Restore window' }).waitFor()
+      await bar.getByRole('button', { name: 'Restore window' }).click()
+      await bar.getByRole('button', { name: 'Maximize window' }).waitFor()
+      await bar.getByRole('button', { name: 'Minimize window' }).click()
+      await bar.getByRole('button', { name: 'Close window' }).click()
+      assert.deepEqual(await page.evaluate(() => window.windowActions), ['minimize', 'close'])
+    }
+    console.log(`The ${titleBar} layout keeps window controls above the workspace toolbar.`)
+  } else assert.equal(await page.locator('.desktop-titlebar').count(), 0)
   const event = await page.evaluate(() => new Promise((resolve, reject) => {
     const socket = new WebSocket('/api/v1/events')
     const timeout = setTimeout(() => {
@@ -101,7 +141,10 @@ try {
     }, { once: true })
   }))
   assert.equal(event, 'session.ready')
+  server.stdin.end()
+  assert.equal(await Promise.race([server.exited, Bun.sleep(3000).then(() => 'timeout')]), 0)
   console.log('Packaged frontend, sign-in, session, preferences, workspace, and WebSocket verified.')
+  console.log('Frontend exits when the desktop parent closes its pipe.')
 } finally {
   await browser?.close()
   server.kill()

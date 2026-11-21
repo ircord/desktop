@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod notifications;
 mod server;
 
 use sha2::{Digest, Sha256};
@@ -20,6 +21,14 @@ use tauri_plugin_shell::{
 };
 
 const LOOPBACK: &str = "http://127.0.0.1:47832";
+const DEV_FRONTEND: &str = "http://127.0.0.1:4789";
+const TITLE_BAR: &str = if cfg!(target_os = "macos") {
+    "macos"
+} else if cfg!(target_os = "windows") {
+    "windows"
+} else {
+    "linux"
+};
 
 #[derive(Default)]
 struct Frontend {
@@ -51,9 +60,16 @@ fn open_window(
     let open = app.clone();
     let local_origin = address.origin();
     let navigation_origin = local_origin.clone();
+    let frontend_origin = serde_json::to_string(&local_origin.ascii_serialization())
+        .expect("Serialize the local frontend origin");
+    let desktop_marker = format!(
+        "if (window.location.origin === {frontend_origin}) Object.defineProperty(window, '__IRCordDesktop', {{ value: Object.freeze({{ titleBar: '{TITLE_BAR}' }}) }});"
+    );
     let mut window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(initial))
         .title("IRCord")
         .inner_size(1280., 840.)
+        .min_inner_size(380., 350.)
+        .initialization_script(desktop_marker)
         .disable_drag_drop_handler()
         // WebView cookies are scoped to the loopback host, across ports. Keep the
         // hosted instance's session and cache out of custom backends and dev.
@@ -76,6 +92,17 @@ fn open_window(
             }
             NewWindowResponse::Deny
         });
+    #[cfg(target_os = "macos")]
+    {
+        window = window
+            .title_bar_style(tauri::TitleBarStyle::Overlay)
+            .hidden_title(true)
+            .traffic_light_position(tauri::LogicalPosition::new(15., 15.));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        window = window.decorations(false);
+    }
     if let Some(profile) = profile {
         let fingerprint = Sha256::digest(profile.as_bytes());
         #[cfg(target_os = "macos")]
@@ -222,18 +249,23 @@ async fn connect_server(
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .manage(Frontend::default())
-        .invoke_handler(tauri::generate_handler![connect_server])
+        .invoke_handler(tauri::generate_handler![
+            connect_server,
+            notifications::notification_permission,
+            notifications::request_notification_permission,
+            notifications::show_notification,
+            notifications::focus_notification_window,
+        ])
         .setup(|app| {
-            if tauri::is_dev() && app.config().build.frontend_dist.is_none() {
-                let url = app
-                    .config()
-                    .build
-                    .dev_url
-                    .clone()
-                    .expect("Development frontend URL");
+            notifications::listen(app.handle())?;
+            if tauri::is_dev()
+                && let Some(url) = app.config().build.dev_url.clone()
+                && url.origin().ascii_serialization() == DEV_FRONTEND
+            {
                 open_window(app.handle(), url, None, None)?;
             } else {
                 match server::configured(app.handle()) {
