@@ -13,7 +13,9 @@ use sha2::{Digest, Sha256};
 use tauri::RunEvent;
 use tauri::{
     AppHandle, Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
-    webview::NewWindowResponse,
+    http::header::{CONTENT_SECURITY_POLICY, HeaderValue},
+    utils::config::{Csp, CspDirectiveSources},
+    webview::{NewWindowResponse, PermissionKind, PermissionResponse},
 };
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tauri_plugin_opener::OpenerExt;
@@ -59,6 +61,10 @@ fn open_window(app: &AppHandle, server: &Url) -> tauri::Result<()> {
         "Object.defineProperty(window, '__IRCordDesktop', {{ value: Object.freeze({marker}) }});"
     );
     let open = app.clone();
+    let voice_websocket = origin
+        .replacen("https://", "wss://", 1)
+        .replacen("http://", "ws://", 1);
+    let voice_http = origin.clone();
     let dev_origin = tauri::is_dev()
         .then(|| app.config().build.dev_url.as_ref().map(Url::origin))
         .flatten();
@@ -67,6 +73,28 @@ fn open_window(app: &AppHandle, server: &Url) -> tauri::Result<()> {
         .inner_size(1280., 840.)
         .min_inner_size(380., 350.)
         .initialization_script(desktop_marker)
+        .on_web_resource_request(move |request, response| {
+            if !matches!(request.uri().host(), Some("localhost" | "tauri.localhost")) {
+                return;
+            }
+            if let Some(header) = response.headers_mut().get_mut(CONTENT_SECURITY_POLICY)
+                && let Ok(policy) = header.to_str()
+            {
+                let mut directives: std::collections::HashMap<String, CspDirectiveSources> =
+                    Csp::Policy(policy.to_owned()).into();
+                if let Some(connections) = directives.get_mut("connect-src") {
+                    connections.push(&format!("{voice_websocket}/voice/"));
+                    connections.push(&format!("{voice_http}/voice/"));
+                    if let Ok(value) = HeaderValue::from_str(&Csp::from(directives).to_string()) {
+                        *header = value;
+                    }
+                }
+            }
+        })
+        .on_permission_request(|_, kind| match kind {
+            PermissionKind::Camera => PermissionResponse::Deny,
+            _ => PermissionResponse::Default,
+        })
         .disable_drag_drop_handler()
         .on_navigation(move |url| {
             (url.host_str() == Some("localhost") && url.scheme() == "tauri")
